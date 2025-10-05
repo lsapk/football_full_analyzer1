@@ -118,53 +118,58 @@ def main(args):
     total_processed_frames = 0
     last_frame_idx = 0
 
+    print(f"Processing video with frame_skip={frame_skip}. Analyzing 1 frame every {frame_skip} frames.")
     print('Starting processing...')
     for frame_idx, res in enumerate(results_iter):
-        if frame_idx % frame_skip != 0:
+        try:
+            if frame_idx % frame_skip != 0:
+                continue
+
+            last_frame_idx = frame_idx
+            total_processed_frames += 1
+            frame_time = frame_idx / fps
+            persons, balls = parse_frame_results(res, detector)
+            frame = res.orig_img if hasattr(res, 'orig_img') else None
+
+            if frame is not None:
+                for p in persons:
+                    pid = p['id']
+                    if pid and players.get(pid, {}).get('team') is None:
+                        team = get_player_team(frame, p['box'], cfg.get('team_a_colors', []), cfg.get('team_b_colors', []))
+                        if team:
+                            players.setdefault(pid, {'touches':0,'positions':[],'dist_pixels':0.0,'last_pos':None,'last_frame':None,'max_speed_kmh':0.0,'number':None, 'team':None})
+                            players[pid]['team'] = team
+
+            ball = balls[0] if balls else None
+            if ball:
+                bid = ball.get('id')
+                if bid:
+                    ball_tracks.setdefault(bid, []).append((frame_idx, *box_center(ball['box'])))
+                last_ball_time = frame_time
+
+            owner = find_ball_owner(ball, persons)
+            if owner:
+                pid = owner['id']
+                if pid:
+                    update_player_stats(players, pid, owner, frame_idx, fps, cfg, frame, ocr)
+                    owner_team = players.get(pid, {}).get('team')
+                    if owner_team in team_possession_seconds:
+                        team_possession_seconds[owner_team] += (frame_skip / fps)
+
+                if last_owner and pid != last_owner:
+                    tdiff = frame_time - last_ball_time
+                    prev_pos = players.get(last_owner, {}).get('last_pos')
+                    curr_pos = box_center(owner['box'])
+                    if prev_pos and detect_pass(last_owner, pid, prev_pos, curr_pos, tdiff, cfg):
+                        pass_event = {'type':'pass','time_s':frame_time,'from':last_owner,'to':pid}
+                        p_from, p_to = players.get(last_owner), players.get(pid)
+                        if p_from and p_to:
+                            pass_event['team_from'], pass_event['team_to'] = p_from.get('team'), p_to.get('team')
+                        events.append(pass_event)
+                last_owner = pid
+        except Exception as e:
+            print(f"Skipping frame {frame_idx} due to error: {e}")
             continue
-
-        last_frame_idx = frame_idx
-        total_processed_frames += 1
-        frame_time = frame_idx / fps
-        persons, balls = parse_frame_results(res, detector)
-        frame = res.orig_img if hasattr(res, 'orig_img') else None
-
-        if frame is not None:
-            for p in persons:
-                pid = p['id']
-                if pid and players.get(pid, {}).get('team') is None:
-                    team = get_player_team(frame, p['box'], cfg.get('team_a_colors', []), cfg.get('team_b_colors', []))
-                    if team:
-                        players.setdefault(pid, {'touches':0,'positions':[],'dist_pixels':0.0,'last_pos':None,'last_frame':None,'max_speed_kmh':0.0,'number':None, 'team':None})
-                        players[pid]['team'] = team
-
-        ball = balls[0] if balls else None
-        if ball:
-            bid = ball.get('id')
-            if bid:
-                ball_tracks.setdefault(bid, []).append((frame_idx, *box_center(ball['box'])))
-            last_ball_time = frame_time
-
-        owner = find_ball_owner(ball, persons)
-        if owner:
-            pid = owner['id']
-            if pid:
-                update_player_stats(players, pid, owner, frame_idx, fps, cfg, frame, ocr)
-                owner_team = players.get(pid, {}).get('team')
-                if owner_team in team_possession_seconds:
-                    team_possession_seconds[owner_team] += (frame_skip / fps)
-
-            if last_owner and pid != last_owner:
-                tdiff = frame_time - last_ball_time
-                prev_pos = players.get(last_owner, {}).get('last_pos')
-                curr_pos = box_center(owner['box'])
-                if prev_pos and detect_pass(last_owner, pid, prev_pos, curr_pos, tdiff, cfg):
-                    pass_event = {'type':'pass','time_s':frame_time,'from':last_owner,'to':pid}
-                    p_from, p_to = players.get(last_owner), players.get(pid)
-                    if p_from and p_to:
-                        pass_event['team_from'], pass_event['team_to'] = p_from.get('team'), p_to.get('team')
-                    events.append(pass_event)
-            last_owner = pid
 
     total_duration = last_frame_idx / fps
     export_results(args.output, players, events, args.video, cfg, team_possession_seconds, total_duration)

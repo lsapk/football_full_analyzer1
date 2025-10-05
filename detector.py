@@ -14,5 +14,5 @@ class Detector:
         self.names = self.model.model.names if hasattr(self.model, 'model') else {}
 
     def detect(self, source, show=False, classes=None):
-        return self.model.track(source=source, persist=True, device=self.device, show=show, stream=True, classes=classes)
+        return self.model.track(source=source, tracker='bytetrack.yaml', persist=True, device=self.device, show=show, stream=True, classes=classes)
 
