@@ -14,7 +14,5 @@ class Detector:
         self.names = self.model.model.names if hasattr(self.model, 'model') else {}
 
     def detect(self, source, show=False, classes=None):
-        # When source is a list of frames (a batch), stream must be False.
-        # The model.track() method handles this automatically.
-        return self.model.track(source=source, persist=True, device=self.device, show=show, classes=classes)
+        return self.model.track(source=source, persist=True, device=self.device, show=show, stream=True, classes=classes)
 
