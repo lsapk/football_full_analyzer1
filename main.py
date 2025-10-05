@@ -94,33 +94,69 @@ def export_results(output_dir, players, events, video_path, cfg, team_possession
         json.dump(summary, f, indent=2)
     print('Done. Results saved in', output_dir)
 
+def read_video_in_batches(video_path, batch_size, frame_skip=1):
+    """Generator to read a video and yield batches of frames and their indices."""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"Error opening video file: {video_path}")
+        return
+
+    batch, indices = [], []
+    frame_idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        if frame_idx % frame_skip == 0:
+            batch.append(frame)
+            indices.append(frame_idx)
+
+        if len(batch) == batch_size:
+            yield batch, indices
+            batch, indices = [], []
+
+        frame_idx += 1
+
+    if batch:
+        yield batch, indices
+
+    cap.release()
+
 def main(args):
     os.makedirs(args.output, exist_ok=True)
     cfg = load_config(args.config)
 
     detector = Detector(model_name=cfg.get('yolo_model', 'yolov8n.pt'))
     ocr = JerseyOCR(langs=['en'])
-    results_iter = detector.detect(args.video, show=False)
 
     players, events = {}, []
     ball_tracks = {}
     last_owner, last_ball_time = None, 0
     team_possession_seconds = {k: 0 for k in cfg.get('team_names', {}).keys()}
 
-    fps = 25.0
+    cap = cv2.VideoCapture(args.video)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    cap.release()
+
     frame_skip = cfg.get('frame_skip', 1)
-    total_processed_frames = 0
+    batch_size = cfg.get('batch_size', 1)
+    if batch_size > 1:
+        print(f"Processing in batches of {batch_size}")
 
+    last_frame_idx = 0
     print('Starting processing...')
-    for frame_idx, res in enumerate(results_iter):
-        if frame_idx % frame_skip != 0:
-            continue
-        total_processed_frames += 1
-        frame_time = frame_idx / fps
-        persons, balls = parse_frame_results(res, detector)
-        frame = res.orig_img if hasattr(res, 'orig_img') else None
+    for frame_batch, frame_indices in read_video_in_batches(args.video, batch_size, frame_skip):
+        results_batch = detector.detect(frame_batch)
 
-        if frame is not None:
+        for i, res in enumerate(results_batch):
+            frame_idx = frame_indices[i]
+            last_frame_idx = frame_idx
+            frame_time = frame_idx / fps
+
+            persons, balls = parse_frame_results(res, detector)
+            frame = res.orig_img
+
             for p in persons:
                 pid = p['id']
                 if pid and players.get(pid, {}).get('team') is None:
@@ -128,35 +164,35 @@ def main(args):
                     if team:
                         players.setdefault(pid, {})['team'] = team
 
-        ball = balls[0] if balls else None
-        if ball:
-            bid = ball.get('id')
-            if bid:
-                ball_tracks.setdefault(bid, []).append((frame_idx, *box_center(ball['box'])))
-            last_ball_time = frame_time
+            ball = balls[0] if balls else None
+            if ball:
+                bid = ball.get('id')
+                if bid:
+                    ball_tracks.setdefault(bid, []).append((frame_idx, *box_center(ball['box'])))
+                last_ball_time = frame_time
 
-        owner = find_ball_owner(ball, persons)
-        if owner:
-            pid = owner['id']
-            if pid:
-                update_player_stats(players, pid, owner, frame_idx, fps, cfg, frame, ocr)
-                owner_team = players.get(pid, {}).get('team')
-                if owner_team in team_possession_seconds:
-                    team_possession_seconds[owner_team] += (frame_skip / fps)
+            owner = find_ball_owner(ball, persons)
+            if owner:
+                pid = owner['id']
+                if pid:
+                    update_player_stats(players, pid, owner, frame_idx, fps, cfg, frame, ocr)
+                    owner_team = players.get(pid, {}).get('team')
+                    if owner_team in team_possession_seconds:
+                        team_possession_seconds[owner_team] += (1 / fps) * frame_skip
 
-            if last_owner and pid != last_owner:
-                tdiff = frame_time - last_ball_time
-                prev_pos = players.get(last_owner, {}).get('last_pos')
-                curr_pos = box_center(owner['box'])
-                if prev_pos and detect_pass(last_owner, pid, prev_pos, curr_pos, tdiff, cfg):
-                    pass_event = {'type':'pass','time_s':frame_time,'from':last_owner,'to':pid}
-                    p_from, p_to = players.get(last_owner), players.get(pid)
-                    if p_from and p_to:
-                        pass_event['team_from'], pass_event['team_to'] = p_from.get('team'), p_to.get('team')
-                    events.append(pass_event)
-            last_owner = pid
+                if last_owner and pid != last_owner:
+                    tdiff = frame_time - last_ball_time
+                    prev_pos = players.get(last_owner, {}).get('last_pos')
+                    curr_pos = box_center(owner['box'])
+                    if prev_pos and detect_pass(last_owner, pid, prev_pos, curr_pos, tdiff, cfg):
+                        pass_event = {'type':'pass','time_s':frame_time,'from':last_owner,'to':pid}
+                        p_from, p_to = players.get(last_owner), players.get(pid)
+                        if p_from and p_to:
+                            pass_event['team_from'], pass_event['team_to'] = p_from.get('team'), p_to.get('team')
+                        events.append(pass_event)
+                last_owner = pid
 
-    total_duration = total_processed_frames * frame_skip / fps
+    total_duration = last_frame_idx / fps
     export_results(args.output, players, events, args.video, cfg, team_possession_seconds, total_duration)
 
 if __name__ == '__main__':
