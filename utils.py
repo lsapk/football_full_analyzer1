@@ -1,6 +1,35 @@
 import math, json, os
 import numpy as np
 from shapely.geometry import Point, Polygon
+import cv2
+
+def get_player_team(frame, player_box, team_a_colors, team_b_colors):
+    # crop player image
+    x1,y1,x2,y2 = [int(v) for v in player_box]
+    player_img = frame[y1:y2, x1:x2]
+    # hsv is better for color detection
+    hsv = cv2.cvtColor(player_img, cv2.COLOR_BGR2HSV)
+
+    # sum of pixels matching team colors
+    score_a = 0
+    for c in team_a_colors:
+        lower = np.array(c['lower'])
+        upper = np.array(c['upper'])
+        mask = cv2.inRange(hsv, lower, upper)
+        score_a += cv2.countNonZero(mask)
+
+    score_b = 0
+    for c in team_b_colors:
+        lower = np.array(c['lower'])
+        upper = np.array(c['upper'])
+        mask = cv2.inRange(hsv, lower, upper)
+        score_b += cv2.countNonZero(mask)
+
+    if score_a > score_b:
+        return 'a'
+    elif score_b > score_a:
+        return 'b'
+    return None
 
 def box_center(box):
     # box: [x1,y1,x2,y2]
