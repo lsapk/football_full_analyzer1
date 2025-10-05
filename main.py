@@ -135,7 +135,8 @@ def main(args):
                 if pid and players.get(pid, {}).get('team') is None:
                     team = get_player_team(frame, p['box'], cfg.get('team_a_colors', []), cfg.get('team_b_colors', []))
                     if team:
-                        players.setdefault(pid, {})['team'] = team
+                        players.setdefault(pid, {'touches':0,'positions':[],'dist_pixels':0.0,'last_pos':None,'last_frame':None,'max_speed_kmh':0.0,'number':None, 'team':None})
+                        players[pid]['team'] = team
 
         ball = balls[0] if balls else None
         if ball:
