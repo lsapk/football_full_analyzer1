@@ -28,3 +28,8 @@ track_buffer: 120
 # match_thresh: The IOU (Intersection over Union) threshold for matching tracks with detections.
 # Default: 0.8
 match_thresh: 0.8
+
+# fuse_score: Whether to fuse detection score with motion score. Helps with occlusions but can be sensitive.
+# This parameter is required in recent ultralytics versions.
+# Default: False
+fuse_score: false
