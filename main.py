@@ -22,30 +22,43 @@ def find_ball_owner(ball, persons):
             owner = p
     return owner
 
-def update_player_stats(players, pid, owner_obj, frame_idx, fps, cfg, frame=None, ocr_instance=None):
-    players.setdefault(pid, {'touches':0,'positions':[],'dist_pixels':0.0,'last_pos':None,'last_frame':None,'max_speed_kmh':0.0,'number':None, 'team':None})
-    players[pid]['touches'] += 1
-    cx, cy = box_center(owner_obj['box'])
+def update_player_movement(players, pid, player_obj, frame_idx, fps, cfg):
+    """
+    Updates a single player's position, distance, and speed based on their movement.
+    This should be called for all detected players in every processed frame.
+    """
+    cx, cy = box_center(player_obj['box'])
     players[pid]['positions'].append((frame_idx, cx, cy))
 
-    if players[pid]['last_pos'] is not None:
-        dd = pixel_distance(players[pid]['last_pos'], (cx, cy))
-        players[pid]['dist_pixels'] += dd
-        dt = (frame_idx - players[pid]['last_frame']) / fps if players[pid]['last_frame'] is not None else 1.0/fps
-        sp = speed_kmh(dd, dt if dt > 0 else 1.0/fps, cfg.get('pixels_to_meters', 0.01))
-        if sp > players[pid]['max_speed_kmh']:
-            players[pid]['max_speed_kmh'] = sp
+    frame_skip = cfg.get('frame_skip', 1)
+
+    # Calculate distance and speed if the player was seen in a recent frame
+    if players[pid].get('last_pos') is not None and players[pid].get('last_frame') is not None:
+        # Avoid calculating distance for "teleporting" players (re-identified after long time)
+        if (frame_idx - players[pid]['last_frame']) < (frame_skip * 3):
+            dd = pixel_distance(players[pid]['last_pos'], (cx, cy))
+            players[pid]['dist_pixels'] += dd
+
+            dt = (frame_idx - players[pid]['last_frame']) / fps
+            if dt > 0:
+                sp = speed_kmh(dd, dt, cfg.get('pixels_to_meters', 0.01))
+                if sp > players[pid]['max_speed_kmh']:
+                    players[pid]['max_speed_kmh'] = sp
 
     players[pid]['last_pos'] = (cx, cy)
     players[pid]['last_frame'] = frame_idx
 
-    if frame is not None and ocr_instance and len(players[pid]['positions']) % 50 == 1:
-        try:
-            num = ocr_instance.read_number(frame, owner_obj['box'])
-            if num:
-                players[pid]['number'] = num
-        except Exception:
-            pass
+def filter_players(players, min_positions=10):
+    """
+    Filters out players who have been tracked for only a few frames.
+    These are likely false positives or tracking errors.
+    """
+    filtered_players = {}
+    for pid, data in players.items():
+        if len(data.get('positions', [])) >= min_positions:
+            filtered_players[pid] = data
+    return filtered_players
+
 
 def export_results(output_dir, players, events, video_path, cfg, team_possession_seconds, total_time_seconds):
     team_names = cfg.get('team_names', {})
@@ -131,15 +144,23 @@ def main(args):
             persons, balls = parse_frame_results(res, detector)
             frame = res.orig_img if hasattr(res, 'orig_img') else None
 
+            # --- Team identification and player initialization ---
             if frame is not None:
                 for p in persons:
-                    pid = p['id']
-                    if pid and players.get(pid, {}).get('team') is None:
+                    pid = p.get('id')
+                    if pid and pid not in players:
                         team = get_player_team(frame, p['box'], cfg.get('team_a_colors', []), cfg.get('team_b_colors', []))
                         if team:
                             players.setdefault(pid, {'touches':0,'positions':[],'dist_pixels':0.0,'last_pos':None,'last_frame':None,'max_speed_kmh':0.0,'number':None, 'team':None})
                             players[pid]['team'] = team
 
+            # --- Update movement stats for all tracked players ---
+            for p in persons:
+                pid = p.get('id')
+                if pid and pid in players:
+                    update_player_movement(players, pid, p, frame_idx, fps, cfg)
+
+            # --- Ball and possession logic ---
             ball = balls[0] if balls else None
             if ball:
                 bid = ball.get('id')
@@ -149,29 +170,46 @@ def main(args):
 
             owner = find_ball_owner(ball, persons)
             if owner:
-                pid = owner['id']
-                if pid:
-                    update_player_stats(players, pid, owner, frame_idx, fps, cfg, frame, ocr)
-                    owner_team = players.get(pid, {}).get('team')
+                pid = owner.get('id')
+                if pid and pid in players:
+                    players[pid]['touches'] += 1
+                    owner_team = players[pid].get('team')
                     if owner_team in team_possession_seconds:
                         team_possession_seconds[owner_team] += (frame_skip / fps)
 
-                if last_owner and pid != last_owner:
-                    tdiff = frame_time - last_ball_time
-                    prev_pos = players.get(last_owner, {}).get('last_pos')
-                    curr_pos = box_center(owner['box'])
-                    if prev_pos and detect_pass(last_owner, pid, prev_pos, curr_pos, tdiff, cfg):
-                        pass_event = {'type':'pass','time_s':frame_time,'from':last_owner,'to':pid}
-                        p_from, p_to = players.get(last_owner), players.get(pid)
-                        if p_from and p_to:
-                            pass_event['team_from'], pass_event['team_to'] = p_from.get('team'), p_to.get('team')
-                        events.append(pass_event)
-                last_owner = pid
+                    # OCR for jersey number (only for ball owner)
+                    if frame is not None and ocr and players[pid].get('number') is None:
+                        if len(players[pid]['positions']) % cfg.get('ocr_interval', 25) == 1:
+                            try:
+                                num = ocr.read_number(frame, owner['box'])
+                                if num:
+                                    players[pid]['number'] = num
+                            except Exception:
+                                pass
+
+                    # Pass detection
+                    if last_owner and pid != last_owner:
+                        tdiff = frame_time - last_ball_time
+                        prev_pos = players.get(last_owner, {}).get('last_pos')
+                        curr_pos = box_center(owner['box'])
+                        if prev_pos and detect_pass(last_owner, pid, prev_pos, curr_pos, tdiff, cfg):
+                            pass_event = {'type':'pass','time_s':frame_time,'from':last_owner,'to':pid}
+                            p_from, p_to = players.get(last_owner), players.get(pid)
+                            if p_from and p_to:
+                                pass_event['team_from'], pass_event['team_to'] = p_from.get('team'), p_to.get('team')
+                            events.append(pass_event)
+                    last_owner = pid
         except Exception as e:
             print(f"Skipping frame {frame_idx} due to error: {e}")
             continue
 
     total_duration = last_frame_idx / fps
+
+    # --- Post-processing: Filter out unstable tracks ---
+    min_positions = cfg.get('min_player_positions', 15)
+    players = filter_players(players, min_positions=min_positions)
+    print(f"Finished processing. Found {len(players)} stable player tracks after filtering.")
+
     export_results(args.output, players, events, args.video, cfg, team_possession_seconds, total_duration)
 
 if __name__ == '__main__':

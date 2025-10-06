@@ -1,0 +1,30 @@
+# Ultralytics YOLO tracker settings for Football Analysis
+
+# Tracker type: ByteTrack
+# For a full list of ByteTrack arguments, see https://github.com/ifzhang/ByteTrack/blob/main/tools/track.py
+tracker_type: bytetrack
+
+# --- Core ByteTrack Parameters ---
+
+# track_high_thresh: High confidence threshold for matching. Detections with scores above this are considered high confidence.
+# Default: 0.6
+track_high_thresh: 0.5
+
+# track_low_thresh: Low confidence threshold for re-matching. Detections below this are discarded.
+# Default: 0.1
+track_low_thresh: 0.1
+
+# new_track_thresh: Threshold for creating a new track from a low-confidence detection if it can't be matched.
+# This should be higher than track_low_thresh to avoid creating tracks from noise.
+# Default: 0.7
+new_track_thresh: 0.6
+
+# track_buffer: The number of frames to keep a track alive without any matching detection.
+# This is the MOST CRITICAL parameter for football analysis. Players are often occluded.
+# A value of 120 means the tracker will "remember" a lost player for 120 frames (e.g., ~4 seconds at 30fps).
+# Default: 30
+track_buffer: 120
+
+# match_thresh: The IOU (Intersection over Union) threshold for matching tracks with detections.
+# Default: 0.8
+match_thresh: 0.8
