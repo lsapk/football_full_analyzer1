@@ -1,3 +1,4 @@
+import os
 from ultralytics import YOLO
 import torch
 
@@ -14,7 +15,7 @@ class Detector:
         print(f"Initializing YOLO model: {self.model_name} on device: {self.device}")
 
         # Check if the model file exists
-        if not torch.hub.is_file(self.model_name):
+        if not os.path.isfile(self.model_name):
              raise FileNotFoundError(f"Model file not found at {self.model_name}")
 
         self.model = YOLO(self.model_name)
