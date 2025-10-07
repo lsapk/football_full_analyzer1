@@ -2,11 +2,6 @@ ultralytics>=8.0.20
 opencv-python
 numpy
 pandas
-matplotlib
-tqdm
-shapely
-easyocr
-flask
-gunicorn
-imutils
-pillow
+scikit-learn
+scipy
+openai
