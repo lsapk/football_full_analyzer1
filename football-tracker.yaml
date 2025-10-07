@@ -12,4 +12,4 @@ match_thresh: 0.8       # Threshold for matching tracks
 gmc_method: 'sparseOptFlow' # Method for global motion compensation
 proximity_thresh: 0.5
 appearance_thresh: 0.25
-with_reid: True
+with_reid: False
