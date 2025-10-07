@@ -1,0 +1,15 @@
+# Ultralytics BoT-SORT tracker settings
+tracker_type: botsort # The tracker implementation. [botsort, bytetrack]
+
+# --- General ---
+track_high_thresh: 0.5  # Threshold for the first association
+track_low_thresh: 0.1   # Threshold for the second association
+new_track_thresh: 0.6   # Threshold for creating a new track
+track_buffer: 120       # Frames to buffer when a track is lost. (Default is 30, increased for football)
+match_thresh: 0.8       # Threshold for matching tracks
+
+# --- BoT-SORT specific ---
+gmc_method: 'sparseOptFlow' # Method for global motion compensation
+proximity_thresh: 0.5
+appearance_thresh: 0.25
+with_reid: True

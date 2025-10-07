@@ -34,10 +34,10 @@ class Detector:
         Returns:
             An iterator for the tracking results.
         """
-        # Using 'botsort.yaml' as a robust, standard tracker.
+        # Using a custom tracker configuration optimized for football
         return self.model.track(
             source=source,
-            tracker='botsort.yaml',
+            tracker='football-tracker.yaml',
             persist=True,
             device=self.device,
             show=show,

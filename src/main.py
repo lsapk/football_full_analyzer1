@@ -120,7 +120,8 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     cap.release()
 
     output_video_path = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(video_path))[0]}_annotated.mp4")
-    video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps / cfg.get('frame_skip', 1), (width, height))
+    # Using a more compatible codec for mp4
+    video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'avc1'), fps / cfg.get('frame_skip', 1), (width, height))
 
     # --- Unified Analysis Loop ---
     print("Starting unified analysis loop...")
@@ -136,6 +137,8 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
 
     events, team_stats_history = [], []
     team_possession_seconds = {}
+    last_owner_pid = None
+    current_owner_pid = None
 
     last_frame_idx = 0
     for frame_idx, res in enumerate(results_iter):
