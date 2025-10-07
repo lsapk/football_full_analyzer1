@@ -20,7 +20,8 @@ class Detector:
 
         self.model = YOLO(self.model_name)
         self.model.to(self.device)
-        self.names = self.model.model.names if hasattr(self.model, 'model') else {}
+        # Updated to access class names directly from the model object as per recent ultralytics versions
+        self.names = self.model.names
 
     def detect(self, source, show=False, classes=None):
         """
