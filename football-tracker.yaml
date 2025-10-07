@@ -1,5 +1,5 @@
-# Ultralytics BoT-SORT tracker settings
-tracker_type: botsort # The tracker implementation. [botsort, bytetrack]
+# Ultralytics ByteTrack tracker settings
+tracker_type: bytetrack # The tracker implementation. [botsort, bytetrack]
 
 # --- General ---
 track_high_thresh: 0.5  # Threshold for the first association
