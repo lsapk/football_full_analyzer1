@@ -122,27 +122,20 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     output_video_path = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(video_path))[0]}_annotated.mp4")
     video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps / cfg.get('frame_skip', 1), (width, height))
 
-    print("Step 1: Sampling video to identify teams...")
+    # --- Unified Analysis Loop ---
+    print("Starting unified analysis loop...")
     results_iter = detector.detect(video_path, show=False)
+
+    players = {}
+    team_assignments = {}
+    teams_identified = False
     initial_player_positions = {}
+
     frame_skip = cfg.get('frame_skip', 1)
     frames_to_sample = frame_skip * cfg.get('team_clustering_sample_frames', 10)
-    for frame_idx, res in enumerate(results_iter):
-        if frame_idx > frames_to_sample: break
-        if frame_idx % frame_skip != 0: continue
-        persons, _ = parse_frame_results(res, detector)
-        for p in persons:
-            if p.get('id'): initial_player_positions.setdefault(p['id'], []).append(box_center(p['box']))
 
-    players = {pid: {'touches':0,'positions':[],'dist_pixels':0.0,'last_pos':None,'last_frame':None,'max_speed_kmh':0.0,'team':None} for pid in initial_player_positions}
-    players = assign_teams_by_clustering(players, initial_player_positions)
-    team_assignments = {pid: pdata.get('team') for pid, pdata in players.items()}
-    print("Teams identified. Starting full analysis...")
-
-    results_iter = detector.detect(video_path, show=False)
     events, team_stats_history = [], []
-    team_ids = set(team_assignments.values())
-    team_possession_seconds = {team_id: 0 for team_id in team_ids if team_id is not None}
+    team_possession_seconds = {}
 
     last_frame_idx = 0
     for frame_idx, res in enumerate(results_iter):
@@ -152,38 +145,64 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
             persons, balls = parse_frame_results(res, detector)
             frame = res.orig_img
 
+            # Dynamically add any new players found by the tracker
+            for p in persons:
+                pid = p.get('id')
+                if pid and pid not in players:
+                    players[pid] = {'touches':0,'positions':[],'dist_pixels':0.0,'last_pos':None,'last_frame':None,'max_speed_kmh':0.0,'team':None}
+
+            # Stage 1: Collect positions for team identification
+            if not teams_identified:
+                for p in persons:
+                    pid = p.get('id')
+                    if pid: initial_player_positions.setdefault(pid, []).append(box_center(p['box']))
+
+                if frame_idx > frames_to_sample:
+                    print("Identifying teams based on collected positions...")
+                    players = assign_teams_by_clustering(players, initial_player_positions)
+                    team_assignments = {pid: pdata.get('team') for pid, pdata in players.items()}
+
+                    team_ids = set(team_assignments.values())
+                    team_possession_seconds = {team_id: 0 for team_id in team_ids if team_id is not None}
+                    teams_identified = True
+                    print("Teams identified. Continuing full analysis...")
+
+            # Stage 2: Main analysis logic (runs on every frame)
             for p in persons:
                 pid = p.get('id')
                 if pid and pid in players:
                     p['center'] = box_center(p['box'])
                     stats.update_player_movement(players[pid], p, frame_idx, fps, cfg)
 
-            current_team_stats = stats.calculate_team_stats(players, team_assignments, cfg.get('pixels_to_meters'))
-            team_stats_history.append(current_team_stats)
+            current_team_stats = {}
+            if teams_identified:
+                current_team_stats = stats.calculate_team_stats(players, team_assignments, cfg.get('pixels_to_meters'))
+                team_stats_history.append(current_team_stats)
 
             ball = balls[0] if balls else None
             owner = find_ball_owner(ball, persons)
             owner_pid = owner['id'] if owner else None
 
-            if owner_pid and owner_pid in players:
+            if teams_identified and owner_pid and owner_pid in players:
                 players[owner_pid]['touches'] += 1
                 owner_team = players[owner_pid].get('team')
                 if owner_team in team_possession_seconds:
                     team_possession_seconds[owner_team] += (frame_skip / fps)
 
-            # Update event manager and collect new events
             new_events = event_manager.update(frame_idx, players, ball, owner_pid)
             events.extend(new_events)
 
+            # Annotation
             ball_pos = box_center(balls[0]['box']) if balls else None
             y_offset = 30
-            for team_id, team_data in current_team_stats.items():
-                if team_id is None: continue
-                compactness = team_data.get('compactness', 0)
-                team_name = cfg['team_names'].get(str(team_id), f"Team {team_id}")
-                text = f"{team_name} Compactness: {compactness:.2f}m"
-                cv2.putText(frame, text, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
-                y_offset += 30
+            if teams_identified:
+                for team_id, team_data in current_team_stats.items():
+                    if team_id is None: continue
+                    compactness = team_data.get('compactness', 0)
+                    team_name = cfg['team_names'].get(str(team_id), f"Team {team_id}")
+                    text = f"{team_name} Compactness: {compactness:.2f}m"
+                    cv2.putText(frame, text, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+                    y_offset += 30
 
             annotated_frame = draw_annotations(frame.copy(), players, ball_pos, team_assignments)
             video_writer.write(annotated_frame)
@@ -194,7 +213,12 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     video_writer.release()
     print(f"Annotated video saved to {output_video_path}")
     total_duration = last_frame_idx / fps
-    players = filter_players(players, min_positions=cfg.get('min_player_positions', 15))
-    print(f"Finished processing. Found {len(players)} stable player tracks.")
 
+    # Filter players with too few positions to be considered stable tracks
+    min_pos_filter = cfg.get('min_player_positions', 2) # Using the value from main.py config
+    print(f"DEBUG: Total players tracked before filtering: {len(players)}")
+    players = filter_players(players, min_positions=min_pos_filter)
+    print(f"DEBUG: Total players after filtering: {len(players)}")
+
+    print(f"Finished processing. Found {len(players)} stable player tracks.")
     export_results(output_dir, players, events, video_path, cfg, team_possession_seconds, total_duration, team_stats_history, generate_llm_report)
