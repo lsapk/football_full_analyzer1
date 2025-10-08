@@ -120,8 +120,8 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     cap.release()
 
     output_video_path = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(video_path))[0]}_annotated.avi")
-    # Reverting to XVID codec for environment compatibility
-    video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'XVID'), fps / cfg.get('frame_skip', 1), (width, height))
+    # Using MJPG codec for maximum compatibility
+    video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'MJPG'), fps / cfg.get('frame_skip', 1), (width, height))
 
     # --- Unified Analysis Loop ---
     print("Starting unified analysis loop...")
