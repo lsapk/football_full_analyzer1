@@ -1,15 +1,12 @@
-# Ultralytics ByteTrack tracker settings
-tracker_type: bytetrack # The tracker implementation. [botsort, bytetrack]
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
-# --- General ---
-track_high_thresh: 0.5  # Threshold for the first association
-track_low_thresh: 0.1   # Threshold for the second association
-new_track_thresh: 0.6   # Threshold for creating a new track
-track_buffer: 120       # Frames to buffer when a track is lost. (Default is 30, increased for football)
-match_thresh: 0.8       # Threshold for matching tracks
+# ByteTrack tracker defaults for mode="track"
+# Docs: https://docs.ultralytics.com/modes/track/
 
-# --- BoT-SORT specific ---
-gmc_method: 'sparseOptFlow' # Method for global motion compensation
-proximity_thresh: 0.5
-appearance_thresh: 0.25
-with_reid: False
+tracker_type: bytetrack # (str) Tracker backend: botsort|bytetrack; choose bytetrack for the classic baseline
+track_high_thresh: 0.25 # (float) First-stage match threshold; raise for cleaner tracks, lower to keep more
+track_low_thresh: 0.1 # (float) Second-stage threshold for low-score matches; balances recovery vs drift
+new_track_thresh: 0.25 # (float) Start a new track if no match ≥ this; higher reduces false tracks
+track_buffer: 120 # (int) Frames to keep lost tracks alive; higher handles occlusion, increases ID switches risk
+match_thresh: 0.8 # (float) Association similarity threshold (IoU/cost); tune with detector quality
+fuse_score: True # (bool) Fuse detection score with motion/IoU for matching; stabilizes weak detections
