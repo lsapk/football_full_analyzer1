@@ -163,6 +163,7 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     team_colors = {}
     teams_identified = False
     player_color_samples = {}
+    initial_player_positions = {} # Re-add for goalkeeper detection
     frame_skip = cfg.get('frame_skip', 1)
     frames_to_sample = frame_skip * cfg.get('team_clustering_sample_frames', 20)
     events, team_stats_history = [], []
@@ -187,9 +188,12 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
             for p in persons:
                 pid = p.get('id')
                 if pid:
+                    # Collect color samples
                     color = get_dominant_color(frame_bgr, p['box'])
                     if color:
                         player_color_samples.setdefault(pid, []).append(color)
+                    # Collect initial positions for goalkeeper detection
+                    initial_player_positions.setdefault(pid, []).append(box_center(p['box']))
 
             if frame_idx > frames_to_sample:
                 team_assignments, team_colors = assign_teams_by_color(players, player_color_samples)
