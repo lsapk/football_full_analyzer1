@@ -80,11 +80,7 @@ def draw_annotations(frame, players, ball_position, team_assignments):
             points = np.array(positions, dtype=np.int32)
             hull = cv2.convexHull(points)
             color = TEAM_A_COLOR if team_id == '0' else TEAM_B_COLOR
-            cv2.polylines(overlay, [hull], isClosed=True, color=color, thickness=2) # Draw hull border
-            cv2.fillConvexPoly(overlay, hull, color)
-
-    alpha = 0.4  # Increased transparency
-    frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+            cv2.polylines(frame, [hull], isClosed=True, color=color, thickness=2) # Draw hull border directly on the frame
 
     return frame
 
