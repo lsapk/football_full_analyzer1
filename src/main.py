@@ -37,8 +37,28 @@ def find_ball_owner(ball, persons):
             min_dist, owner = d, p
     return owner
 
-def filter_players(players, min_positions=10):
-    return {pid: data for pid, data in players.items() if len(data.get('positions', [])) >= min_positions}
+def filter_players(players, min_positions=10, min_distance_m=20, goalkeeper_ids=None):
+    if goalkeeper_ids is None:
+        goalkeeper_ids = []
+
+    active_players = {}
+    for pid, data in players.items():
+        # Keep players with a minimum number of detections
+        if len(data.get('positions', [])) < min_positions:
+            continue
+
+        # If the player is a goalkeeper, do not reclassify them
+        if pid in goalkeeper_ids:
+            active_players[pid] = data
+            continue
+
+        # Reclassify players with very little movement as "non-players"
+        distance_m = data.get('distance_m', 0)
+        if distance_m < min_distance_m:
+            data['team'] = 'non_player' # Reclassify
+
+        active_players[pid] = data
+    return active_players
 
 def export_results(output_dir, players, events, video_path, cfg, team_possession_seconds, total_time_seconds, team_stats_history, generate_llm_report=False):
     team_names = cfg.get('team_names', {})
@@ -192,18 +212,35 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
                     team_possession_seconds[owner_team] += (frame_skip / fps)
 
             new_events = event_manager.update(frame_idx, players, ball, last_owner_pid, current_owner_pid)
-            events.extend(new_events)
+            if new_events:
+                events.extend(new_events)
+
+            # Update last owner *after* processing events for the current frame
             last_owner_pid = current_owner_pid
 
             # Annotation
             ball_pos = box_center(balls[0]['box']) if balls else None
             y_offset = 30
             if teams_identified:
+                # --- Tactical Block Analysis ---
+                team_positions = {}
+                for pid, p_data in players.items():
+                    team_id = team_assignments.get(pid)
+                    if team_id is not None and team_id != 'non_player' and p_data.get('last_pos') is not None:
+                        team_positions.setdefault(team_id, []).append(p_data['last_pos'])
+
                 for team_id, team_data in current_team_stats.items():
                     if team_id is None: continue
+
                     compactness = team_data.get('compactness', 0)
                     team_name = cfg['team_names'].get(str(team_id), f"Team {team_id}")
-                    text = f"{team_name} Compactness: {compactness:.2f}m"
+
+                    # Analyze and display defensive block
+                    block_status = "N/A"
+                    if team_id in team_positions:
+                        block_status = tactical_analysis.analyze_team_shape(team_positions[team_id], height)
+
+                    text = f"{team_name}: Compactness: {compactness:.2f}m | Block: {block_status}"
                     cv2.putText(frame, text, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
                     y_offset += 30
 
@@ -217,10 +254,26 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     print(f"Annotated video saved to {output_video_path}")
     total_duration = last_frame_idx / fps
 
+    # --- Goalkeeper Identification ---
+    goalkeeper_ids = []
+    if teams_identified and initial_player_positions:
+        team_0_players = {pid: pos for pid, pos in initial_player_positions.items() if players.get(pid, {}).get('team') == '0'}
+        team_1_players = {pid: pos for pid, pos in initial_player_positions.items() if players.get(pid, {}).get('team') == '1'}
+
+        if team_0_players:
+            # Assuming goal is on the left (min x)
+            gk_0 = min(team_0_players.keys(), key=lambda pid: np.mean([p[0] for p in team_0_players[pid]]))
+            goalkeeper_ids.append(gk_0)
+        if team_1_players:
+            # Assuming goal is on the right (max x)
+            gk_1 = max(team_1_players.keys(), key=lambda pid: np.mean([p[0] for p in team_1_players[pid]]))
+            goalkeeper_ids.append(gk_1)
+        print(f"Identified goalkeepers (by position): {goalkeeper_ids}")
+
     # Filter players with too few positions to be considered stable tracks
     min_pos_filter = cfg.get('min_player_positions', 2) # Using the value from main.py config
     print(f"DEBUG: Total players tracked before filtering: {len(players)}")
-    players = filter_players(players, min_positions=min_pos_filter)
+    players = filter_players(players, min_positions=min_pos_filter, goalkeeper_ids=goalkeeper_ids)
     print(f"DEBUG: Total players after filtering: {len(players)}")
 
     print(f"Finished processing. Found {len(players)} stable player tracks.")

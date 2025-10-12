@@ -5,8 +5,9 @@ import numpy as np
 # Use a colormap to assign unique and vibrant colors to players
 PLAYER_COLORS = cv2.applyColorMap(np.arange(0, 255, 15, dtype=np.uint8), cv2.COLORMAP_HSV)
 BALL_COLOR = (255, 255, 255)  # White
-TEAM_A_COLOR = (255, 0, 0)   # Blue
+TEAM_A_COLOR = (0, 255, 0)   # Green
 TEAM_B_COLOR = (0, 0, 255)   # Red
+NON_PLAYER_COLOR = (128, 128, 128) # Gray
 
 def draw_annotations(frame, players, ball_position, team_assignments):
     """
@@ -24,17 +25,17 @@ def draw_annotations(frame, players, ball_position, team_assignments):
     if frame is None:
         return None
 
-    # --- Draw trajectories ---
-    for pid, player_data in players.items():
-        positions_with_frame = player_data.get('positions', [])
-        if len(positions_with_frame) > 2:
-            # Extract only (x, y) coordinates for drawing, ignoring the frame index
-            coord_only_positions = [(int(x), int(y)) for frame_idx, x, y in positions_with_frame]
+    # --- Draw trajectories (COMMENTED OUT) ---
+    # for pid, player_data in players.items():
+    #     positions_with_frame = player_data.get('positions', [])
+    #     if len(positions_with_frame) > 2:
+    #         # Extract only (x, y) coordinates for drawing, ignoring the frame index
+    #         coord_only_positions = [(int(x), int(y)) for frame_idx, x, y in positions_with_frame]
 
-            # Ensure positions are integers for drawing
-            line_points = np.array(coord_only_positions, dtype=np.int32).reshape((-1, 1, 2))
-            color = PLAYER_COLORS[pid % len(PLAYER_COLORS)][0].tolist()
-            cv2.polylines(frame, [line_points], isClosed=False, color=color, thickness=2)
+    #         # Ensure positions are integers for drawing
+    #         line_points = np.array(coord_only_positions, dtype=np.int32).reshape((-1, 1, 2))
+    #         color = PLAYER_COLORS[pid % len(PLAYER_COLORS)][0].tolist()
+    #         cv2.polylines(frame, [line_points], isClosed=False, color=color, thickness=2)
 
     # --- Draw player boxes and their IDs ---
     for pid, player_data in players.items():
@@ -42,7 +43,11 @@ def draw_annotations(frame, players, ball_position, team_assignments):
         if last_box is not None:
             x1, y1, x2, y2 = map(int, last_box)
             team = team_assignments.get(pid)
-            color = TEAM_A_COLOR if team == '0' else TEAM_B_COLOR if team == '1' else (0, 255, 0)
+
+            if team == 'non_player':
+                color = NON_PLAYER_COLOR
+            else:
+                color = TEAM_A_COLOR if team == '0' else TEAM_B_COLOR
 
             # Draw the bounding box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -61,10 +66,11 @@ def draw_annotations(frame, players, ball_position, team_assignments):
         cv2.circle(frame, (int(ball_position[0]), int(ball_position[1])), radius=8, color=BALL_COLOR, thickness=-1)
 
     # --- Draw team convex hulls ---
+    overlay = frame.copy()
     team_positions = {}
     for pid, p_data in players.items():
         team_id = team_assignments.get(pid)
-        if team_id is not None and p_data.get('last_pos') is not None:
+        if team_id is not None and team_id != 'non_player' and p_data.get('last_pos') is not None:
             if team_id not in team_positions:
                 team_positions[team_id] = []
             team_positions[team_id].append(p_data['last_pos'])
@@ -74,7 +80,11 @@ def draw_annotations(frame, players, ball_position, team_assignments):
             points = np.array(positions, dtype=np.int32)
             hull = cv2.convexHull(points)
             color = TEAM_A_COLOR if team_id == '0' else TEAM_B_COLOR
-            cv2.polylines(frame, [hull], isClosed=True, color=color, thickness=2)
+            cv2.polylines(overlay, [hull], isClosed=True, color=color, thickness=2) # Draw hull border
+            cv2.fillConvexPoly(overlay, hull, color)
+
+    alpha = 0.4  # Increased transparency
+    frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
 
     return frame
 

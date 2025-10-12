@@ -1,5 +1,31 @@
 import os
 import openai
+import numpy as np
+
+def analyze_team_shape(player_positions, frame_height):
+    """
+    Analyzes the team's defensive block based on player positions.
+
+    Args:
+        player_positions (list): A list of (x, y) coordinates for a single team.
+        frame_height (int): The height of the video frame.
+
+    Returns:
+        str: 'High Block', 'Mid-Block', 'Low Block', or 'N/A'.
+    """
+    if not player_positions or len(player_positions) < 3:
+        return 'N/A'
+
+    # Calculate the centroid of the player positions
+    centroid_y = np.mean([p[1] for p in player_positions])
+
+    # Determine the block based on the centroid's vertical position
+    if centroid_y < frame_height / 3:
+        return 'High Block'
+    elif centroid_y < 2 * frame_height / 3:
+        return 'Mid-Block'
+    else:
+        return 'Low Block'
 
 def format_data_for_llm(team_stats_df, player_stats_df, events_df):
     """
