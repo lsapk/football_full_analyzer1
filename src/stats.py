@@ -40,6 +40,7 @@ def update_player_movement(player_data, player_obj, frame_idx, fps, cfg):
                     player_data['max_speed_kmh'] = sp
 
     player_data['last_pos'] = (cx, cy)
+    player_data['last_box'] = player_obj['box']
     player_data['last_frame'] = frame_idx
 
 def calculate_team_stats(players, team_assignments, pixels_to_meters=0.1):

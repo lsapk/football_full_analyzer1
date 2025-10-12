@@ -151,7 +151,7 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
             for p in persons:
                 pid = p.get('id')
                 if pid and pid not in players:
-                    players[pid] = {'touches':0,'positions':[],'dist_pixels':0.0,'last_pos':None,'last_frame':None,'max_speed_kmh':0.0,'team':None}
+                    players[pid] = {'touches':0,'positions':[],'dist_pixels':0.0,'last_pos':None,'last_frame':None,'max_speed_kmh':0.0,'team':None, 'last_box': None, 'number': None}
 
             # Stage 1: Collect positions for team identification
             if not teams_identified:

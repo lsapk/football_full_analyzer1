@@ -5,7 +5,7 @@ from src.main import run_analysis
 # --- Default Configuration ---
 # This replaces the old config.json file
 DEFAULT_CONFIG = {
-    "frame_skip": 10,
+    "frame_skip": 2,
     "inactive_game_frame_limit": 50,
     "min_player_positions": 15,
     "pixels_to_meters": 0.1,  # Example value, should be calibrated
