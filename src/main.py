@@ -137,8 +137,8 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     # Using MJPG codec for maximum compatibility
     video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'MJPG'), fps / cfg.get('frame_skip', 1), (width, height))
 
-    # --- Pass 1: Data Analysis ---
-    print("Starting Pass 1: Data Analysis...")
+    # --- Single-Pass Analysis with In-Memory Annotation ---
+    print("Starting single-pass analysis...")
     results_iter = detector.detect(video_path, show=False)
 
     players = {}
@@ -150,7 +150,7 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     events, team_stats_history = [], []
     team_possession_seconds = {}
     last_owner_pid = None
-    frame_detections = []
+    annotations_to_draw = []
 
     last_frame_idx = 0
     for frame_idx, res in enumerate(results_iter):
@@ -158,7 +158,6 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
             continue
         last_frame_idx = frame_idx
         persons, balls = parse_frame_results(res, detector)
-        frame_detections.append({'persons': persons, 'balls': balls})
 
         for p in persons:
             pid = p.get('id')
@@ -178,6 +177,7 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
                 teams_identified = True
 
         for p in persons:
+            p['center'] = box_center(p['box'])
             pid = p.get('id')
             if pid and pid in players:
                 stats.update_player_movement(players[pid], p, frame_idx, fps, cfg)
@@ -194,6 +194,16 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
         new_events = event_manager.update(frame_idx, players, ball, last_owner_pid, current_owner_pid)
         events.extend(new_events)
         last_owner_pid = current_owner_pid
+
+        # Store annotations for this frame
+        current_annotations = {'players': {}, 'ball_pos': None, 'team_assignments': team_assignments.copy()}
+        for p in persons:
+            pid = p.get('id')
+            if pid in players:
+                current_annotations['players'][pid] = {'last_box': p['box']}
+        if balls:
+            current_annotations['ball_pos'] = box_center(balls[0]['box'])
+        annotations_to_draw.append(current_annotations)
 
     # --- Post-Analysis Filtering ---
     goalkeeper_ids = []
@@ -219,26 +229,19 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
 
     active_players = {pid: data for pid, data in players.items() if pid not in non_player_ids}
 
-    # --- Pass 2: Video Annotation ---
-    print("Starting Pass 2: Video Annotation...")
+    # --- Annotation Pass ---
+    print("Starting annotation pass...")
     cap = cv2.VideoCapture(video_path)
     frame_idx = 0
-    detection_idx = 0
+    annotation_idx = 0
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-        if frame_idx % frame_skip == 0 and detection_idx < len(frame_detections):
-            current_detections = frame_detections[detection_idx]
-            persons = current_detections['persons']
-            balls = current_detections['balls']
-
-            for p in persons:
-                pid = p.get('id')
-                if pid in players:
-                    players[pid]['last_box'] = p['box']
-
-            ball_pos = box_center(balls[0]['box']) if balls else None
+        if frame_idx % frame_skip == 0 and annotation_idx < len(annotations_to_draw):
+            ann = annotations_to_draw[annotation_idx]
+            # Update team assignments with the final filtered list
+            ann['team_assignments'] = team_assignments
 
             y_offset = 30
             if teams_identified:
@@ -260,9 +263,9 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
                     cv2.putText(frame, text, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
                     y_offset += 30
 
-            annotated_frame = draw_annotations(frame, players, ball_pos, team_assignments)
+            annotated_frame = draw_annotations(frame, ann['players'], ann['ball_pos'], ann['team_assignments'])
             video_writer.write(annotated_frame)
-            detection_idx += 1
+            annotation_idx += 1
         frame_idx += 1
     cap.release()
     video_writer.release()
