@@ -1,4 +1,4 @@
-import os, json, time, logging
+import os, json, time
 import cv2
 import numpy as np
 import pandas as pd
@@ -9,26 +9,6 @@ from .events import EventManager
 from .visualization import draw_annotations
 from . import stats
 from . import tactical_analysis
-from .ball_manager import BallManager
-
-def setup_logging(output_dir):
-    """Sets up logging to file and console."""
-    log_file = os.path.join(output_dir, 'analysis.log')
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
-    logging.info("Logging setup complete.")
-
-def get_best_ball(balls):
-    """Selects the ball with the highest confidence."""
-    if not balls:
-        return None
-    return max(balls, key=lambda b: b.get('conf', 0))
 
 def assign_teams_by_clustering(players, initial_positions):
     if len(initial_positions) < 2:
@@ -129,11 +109,9 @@ def export_results(output_dir, players, events, video_path, cfg, team_possession
 
 def run_analysis(video_path, output_dir, model_path, config, generate_llm_report=False):
     os.makedirs(output_dir, exist_ok=True)
-    setup_logging(output_dir)
     cfg = config
     detector = Detector(model_name=model_path)
     event_manager = EventManager(cfg)
-    ball_manager = BallManager(max_unseen_frames=cfg.get('frame_skip', 1) * 5) # 5 skipped frames
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
@@ -203,15 +181,8 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
                 current_team_stats = stats.calculate_team_stats(players, team_assignments, cfg.get('pixels_to_meters'))
                 team_stats_history.append(current_team_stats)
 
-            best_ball_detection = get_best_ball(balls)
-            ball_manager.update(best_ball_detection)
-            ball_pos = ball_manager.get_position()
-            ball_box = ball_manager.get_box()
-
-            # Create a temporary ball object for owner and event detection
-            current_ball_obj = {'box': ball_box} if ball_box else None
-
-            owner = find_ball_owner(current_ball_obj, persons)
+            ball = balls[0] if balls else None
+            owner = find_ball_owner(ball, persons)
             current_owner_pid = owner['id'] if owner else None
 
             if teams_identified and current_owner_pid and current_owner_pid in players:
@@ -220,11 +191,12 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
                 if owner_team in team_possession_seconds:
                     team_possession_seconds[owner_team] += (frame_skip / fps)
 
-            new_events = event_manager.update(frame_idx, players, current_ball_obj, last_owner_pid, current_owner_pid)
+            new_events = event_manager.update(frame_idx, players, ball, last_owner_pid, current_owner_pid)
             events.extend(new_events)
-            last_owner_pid = current_owner_pid # Update the last owner for the next frame
+            last_owner_pid = current_owner_pid
 
             # Annotation
+            ball_pos = box_center(balls[0]['box']) if balls else None
             y_offset = 30
             if teams_identified:
                 for team_id, team_data in current_team_stats.items():
@@ -235,11 +207,10 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
                     cv2.putText(frame, text, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
                     y_offset += 30
 
-            annotated_frame = draw_annotations(frame.copy(), players, ball_manager.get_position(), team_assignments)
-            if annotated_frame is not None and annotated_frame.size > 0:
-                video_writer.write(annotated_frame)
+            annotated_frame = draw_annotations(frame.copy(), players, ball_pos, team_assignments)
+            video_writer.write(annotated_frame)
         except Exception as e:
-            logging.error(f"Error processing frame {frame_idx}: {e}", exc_info=True)
+            # print(f"Error in frame {frame_idx}: {e}")
             continue
 
     video_writer.release()

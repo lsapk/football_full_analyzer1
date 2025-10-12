@@ -26,10 +26,13 @@ def draw_annotations(frame, players, ball_position, team_assignments):
 
     # --- Draw trajectories ---
     for pid, player_data in players.items():
-        positions = player_data.get('positions', [])
-        if len(positions) > 2:
+        positions_with_frame = player_data.get('positions', [])
+        if len(positions_with_frame) > 2:
+            # Extract only (x, y) coordinates for drawing, ignoring the frame index
+            coord_only_positions = [(int(x), int(y)) for frame_idx, x, y in positions_with_frame]
+
             # Ensure positions are integers for drawing
-            line_points = np.array(positions, dtype=np.int32).reshape((-1, 1, 2))
+            line_points = np.array(coord_only_positions, dtype=np.int32).reshape((-1, 1, 2))
             color = PLAYER_COLORS[pid % len(PLAYER_COLORS)][0].tolist()
             cv2.polylines(frame, [line_points], isClosed=False, color=color, thickness=2)
 
