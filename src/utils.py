@@ -38,20 +38,26 @@ def get_dominant_color(image, box, k=3):
     if player_crop.size == 0:
         return None
 
+    # Convert BGR to HSV for more robust color clustering
+    hsv_crop = cv2.cvtColor(player_crop, cv2.COLOR_BGR2HSV)
+
     # Reshape the image to be a list of pixels
-    pixels = player_crop.reshape(-1, 3)
+    pixels = hsv_crop.reshape(-1, 3)
     pixels = np.float32(pixels)
 
-    # Perform K-Means clustering
+    # Perform K-Means clustering in HSV space
     kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
     kmeans.fit(pixels)
 
     # Find the most frequent cluster
     unique, counts = np.unique(kmeans.labels_, return_counts=True)
     dominant_cluster_idx = unique[np.argmax(counts)]
-    dominant_color = kmeans.cluster_centers_[dominant_cluster_idx]
+    dominant_hsv_color = kmeans.cluster_centers_[dominant_cluster_idx]
 
-    return tuple(map(int, dominant_color))
+    # Convert the dominant HSV color back to BGR for display
+    dominant_bgr_color = cv2.cvtColor(np.uint8([[dominant_hsv_color]]), cv2.COLOR_HSV2BGR)[0][0]
+
+    return tuple(map(int, dominant_bgr_color))
 
 def box_center(box):
     """
