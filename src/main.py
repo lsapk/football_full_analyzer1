@@ -4,26 +4,43 @@ import numpy as np
 import pandas as pd
 from .detector import Detector
 from .tracker import parse_frame_results
-from .utils import box_center, pixel_distance, speed_kmh
+from .utils import box_center, pixel_distance, speed_kmh, get_dominant_color
 from .events import EventManager
 from .visualization import draw_annotations
 from . import stats
 from . import tactical_analysis
 
-def assign_teams_by_clustering(players, initial_positions):
-    if len(initial_positions) < 2:
-        for i, pid in enumerate(players):
-            players[pid]['team'] = str(i)
-        return players
-    player_ids = list(initial_positions.keys())
-    positions = np.array([np.mean(pos, axis=0) for pos in initial_positions.values()])
+def assign_teams_by_color(players, player_colors, min_samples=3):
+    """
+    Assigns teams to players based on the dominant color of their jerseys.
+
+    Returns:
+        tuple: (team_assignments, team_colors)
+    """
+    all_colors = [color for pid, colors in player_colors.items() for color in colors if color is not None]
+    if not all_colors:
+        return {}, {}
+
+    # Cluster all collected colors into two main team colors
     from sklearn.cluster import KMeans
     kmeans = KMeans(n_clusters=2, random_state=42, n_init=10)
-    team_assignments = kmeans.fit_predict(positions)
-    for i, pid in enumerate(player_ids):
+    kmeans.fit(all_colors)
+    team_color_map = {0: tuple(map(int, kmeans.cluster_centers_[0])), 1: tuple(map(int, kmeans.cluster_centers_[1]))}
+
+    team_assignments = {}
+    for pid, colors in player_colors.items():
+        if not colors:
+            continue
+        # Assign team based on the closest team color
+        player_avg_color = np.mean(colors, axis=0)
+        dist_0 = np.linalg.norm(player_avg_color - kmeans.cluster_centers_[0])
+        dist_1 = np.linalg.norm(player_avg_color - kmeans.cluster_centers_[1])
+        team_id = '0' if dist_0 < dist_1 else '1'
         if pid in players:
-            players[pid]['team'] = str(team_assignments[i])
-    return players
+            players[pid]['team'] = team_id
+            team_assignments[pid] = team_id
+
+    return team_assignments, team_color_map
 
 def find_ball_owner(ball, persons):
     owner = None
@@ -143,10 +160,11 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
 
     players = {}
     team_assignments = {}
+    team_colors = {}
     teams_identified = False
-    initial_player_positions = {}
+    player_color_samples = {}
     frame_skip = cfg.get('frame_skip', 1)
-    frames_to_sample = frame_skip * cfg.get('team_clustering_sample_frames', 10)
+    frames_to_sample = frame_skip * cfg.get('team_clustering_sample_frames', 20)
     events, team_stats_history = [], []
     team_possession_seconds = {}
     last_owner_pid = None
@@ -157,6 +175,7 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
         if frame_idx % frame_skip != 0:
             continue
         last_frame_idx = frame_idx
+        frame_bgr = res.orig_img
         persons, balls = parse_frame_results(res, detector)
 
         for p in persons:
@@ -168,13 +187,17 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
             for p in persons:
                 pid = p.get('id')
                 if pid:
-                    initial_player_positions.setdefault(pid, []).append(box_center(p['box']))
+                    color = get_dominant_color(frame_bgr, p['box'])
+                    if color:
+                        player_color_samples.setdefault(pid, []).append(color)
+
             if frame_idx > frames_to_sample:
-                players = assign_teams_by_clustering(players, initial_player_positions)
-                team_assignments = {pid: pdata.get('team') for pid, pdata in players.items()}
-                team_ids = set(team_assignments.values())
-                team_possession_seconds = {team_id: 0 for team_id in team_ids if team_id is not None}
-                teams_identified = True
+                team_assignments, team_colors = assign_teams_by_color(players, player_color_samples)
+                if team_assignments:
+                    team_ids = set(team_assignments.values())
+                    team_possession_seconds = {team_id: 0 for team_id in team_ids if team_id is not None}
+                    teams_identified = True
+                    print("Teams identified by color:", team_colors)
 
         for p in persons:
             p['center'] = box_center(p['box'])
@@ -200,7 +223,8 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
         for p in persons:
             pid = p.get('id')
             if pid in players:
-                current_annotations['players'][pid] = {'last_box': p['box']}
+                # Add both box and center position for this frame
+                current_annotations['players'][pid] = {'last_box': p['box'], 'center': p.get('center')}
         if balls:
             current_annotations['ball_pos'] = box_center(balls[0]['box'])
         annotations_to_draw.append(current_annotations)
@@ -244,26 +268,37 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
             ann['team_assignments'] = team_assignments
 
             y_offset = 30
+            # Prepare data for tactical and visual annotation for the CURRENT frame
+            current_frame_player_positions = {}
+            for pid, p_data in ann['players'].items():
+                if p_data.get('center'):
+                    current_frame_player_positions[pid] = p_data['center']
+
             if teams_identified:
+                # Calculate team stats using the final player data (for compactness)
                 current_team_stats = stats.calculate_team_stats(players, team_assignments, cfg.get('pixels_to_meters'))
-                team_positions = {}
-                for pid, p_data in players.items():
+
+                # Group current frame positions by team for tactical analysis
+                team_positions_current_frame = {}
+                for pid, pos in current_frame_player_positions.items():
                     team_id = team_assignments.get(pid)
-                    if team_id is not None and team_id != 'non_player' and p_data.get('last_pos') is not None:
-                        team_positions.setdefault(team_id, []).append(p_data['last_pos'])
+                    if team_id is not None and team_id != 'non_player':
+                        team_positions_current_frame.setdefault(team_id, []).append(pos)
 
                 for team_id, team_data in current_team_stats.items():
                     if team_id is None or team_id == 'non_player': continue
                     compactness = team_data.get('compactness', 0)
                     team_name = cfg['team_names'].get(str(team_id), f"Team {team_id}")
                     block_status = "N/A"
-                    if team_id in team_positions:
-                        block_status = tactical_analysis.analyze_team_shape(team_positions[team_id], height)
+                    if team_id in team_positions_current_frame:
+                        block_status = tactical_analysis.analyze_team_shape(team_positions_current_frame[team_id], height)
                     text = f"{team_name}: Compactness: {compactness:.2f}m | Block: {block_status}"
                     cv2.putText(frame, text, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
                     y_offset += 30
 
-            annotated_frame = draw_annotations(frame, ann['players'], ann['ball_pos'], ann['team_assignments'])
+            # Pass current frame positions to the drawing function
+            ann['player_positions'] = current_frame_player_positions
+            annotated_frame = draw_annotations(frame, ann['players'], ann['ball_pos'], ann['team_assignments'], team_colors, ann.get('player_positions', {}))
             video_writer.write(annotated_frame)
             annotation_idx += 1
         frame_idx += 1
