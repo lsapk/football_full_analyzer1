@@ -160,7 +160,6 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     events, team_stats_history = [], []
     team_possession_seconds = {}
     last_owner_pid = None
-    current_owner_pid = None
 
     last_frame_idx = 0
     for frame_idx, res in enumerate(results_iter):
@@ -213,16 +212,17 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
             current_ball_obj = {'box': ball_box} if ball_box else None
 
             owner = find_ball_owner(current_ball_obj, persons)
-            owner_pid = owner['id'] if owner else None
+            current_owner_pid = owner['id'] if owner else None
 
-            if teams_identified and owner_pid and owner_pid in players:
-                players[owner_pid]['touches'] += 1
-                owner_team = players[owner_pid].get('team')
+            if teams_identified and current_owner_pid and current_owner_pid in players:
+                players[current_owner_pid]['touches'] += 1
+                owner_team = players[current_owner_pid].get('team')
                 if owner_team in team_possession_seconds:
                     team_possession_seconds[owner_team] += (frame_skip / fps)
 
-            new_events = event_manager.update(frame_idx, players, current_ball_obj, owner_pid)
+            new_events = event_manager.update(frame_idx, players, current_ball_obj, last_owner_pid, current_owner_pid)
             events.extend(new_events)
+            last_owner_pid = current_owner_pid # Update the last owner for the next frame
 
             # Annotation
             y_offset = 30
@@ -235,7 +235,7 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
                     cv2.putText(frame, text, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
                     y_offset += 30
 
-            annotated_frame = draw_annotations(frame.copy(), players, ball_pos, team_assignments)
+            annotated_frame = draw_annotations(frame.copy(), players, ball_manager.get_position(), team_assignments)
             if annotated_frame is not None and annotated_frame.size > 0:
                 video_writer.write(annotated_frame)
         except Exception as e:
