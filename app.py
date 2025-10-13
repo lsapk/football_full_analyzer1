@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import tempfile
-import pandas as pd
+# import pandas as pd
 
 # We defer heavy imports to prevent memory issues on startup (Render free tier)
 # import cv2
@@ -100,6 +100,7 @@ if uploaded_file is not None:
 
 # --- Display Results after analysis is done ---
 if st.session_state.analysis_done and st.session_state.results:
+    import pandas as pd
     st.success("✅ Analyse terminée avec succès !")
     st.balloons()
 
