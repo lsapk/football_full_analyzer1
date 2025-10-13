@@ -2,9 +2,11 @@ import streamlit as st
 import os
 import tempfile
 import pandas as pd
-import cv2
-from src.main import run_analysis
-from main import DEFAULT_CONFIG
+
+# We defer heavy imports to prevent memory issues on startup (Render free tier)
+# import cv2
+# from src.main import run_analysis
+# from main import DEFAULT_CONFIG
 
 st.set_page_config(page_title="Analyseur de Match de Football", layout="wide")
 
@@ -67,6 +69,10 @@ if uploaded_file is not None:
                     progress_bar.progress(100)
 
             with st.spinner("Analyse en cours... Cette opération peut prendre plusieurs minutes."):
+                # --- Deferred imports ---
+                from src.main import run_analysis
+                from main import DEFAULT_CONFIG
+
                 model_path = 'models/yolov8n.pt'
                 if not os.path.exists(model_path):
                     st.error(f"Le modèle YOLO est introuvable : {model_path}")
