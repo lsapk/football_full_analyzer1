@@ -1,16 +1,17 @@
 import os, json, time
-import cv2
-import numpy as np
-import pandas as pd
-from .detector import Detector
-from .tracker import parse_frame_results
-from .utils import box_center, pixel_distance, speed_kmh, get_dominant_color
-from .events import EventManager
-from .visualization import draw_annotations
-from . import stats
-from . import tactical_analysis
+# import cv2
+# import numpy as np
+# import pandas as pd
+# from .detector import Detector
+# from .tracker import parse_frame_results
+# from .utils import box_center, pixel_distance, speed_kmh, get_dominant_color
+# from .events import EventManager
+# from .visualization import draw_annotations
+# from . import stats
+# from . import tactical_analysis
 
 def assign_teams_by_color(players, player_colors, min_samples=3):
+    import numpy as np
     """
     Assigns teams to players based on the dominant color of their jerseys.
 
@@ -43,6 +44,7 @@ def assign_teams_by_color(players, player_colors, min_samples=3):
     return team_assignments, team_color_map
 
 def find_ball_owner(ball, persons):
+    from .utils import box_center, pixel_distance
     owner = None
     if not ball or not persons: return None
     bx, by = box_center(ball['box'])
@@ -72,6 +74,8 @@ def filter_players(players, min_positions=10, min_distance_m=20, goalkeeper_ids=
     return non_player_ids
 
 def export_results(output_dir, players, events, video_path, cfg, team_possession_seconds, total_time_seconds, team_stats_history, generate_llm_report=False):
+    import pandas as pd
+    from . import tactical_analysis
     team_names = cfg.get('team_names', {})
 
     # --- Export Player Stats ---
@@ -139,6 +143,16 @@ def export_results(output_dir, players, events, video_path, cfg, team_possession
     print(f"Done. Results saved in {output_dir}")
 
 def run_analysis(video_path, output_dir, model_path, config, generate_llm_report=False, progress_callback=None):
+    import cv2
+    import numpy as np
+    from .detector import Detector
+    from .tracker import parse_frame_results
+    from .utils import box_center, get_dominant_color
+    from .events import EventManager
+    from .visualization import draw_annotations
+    from . import stats
+    from . import tactical_analysis
+
     # --- Progress Logging Setup ---
     def log(message):
         if progress_callback:

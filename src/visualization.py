@@ -1,13 +1,15 @@
-import cv2
-import numpy as np
+# import cv2
+# import numpy as np
 
 # --- Color Configuration ---
 # Use a colormap to assign unique and vibrant colors to players
-PLAYER_COLORS = cv2.applyColorMap(np.arange(0, 255, 15, dtype=np.uint8), cv2.COLORMAP_HSV)
+# PLAYER_COLORS = cv2.applyColorMap(np.arange(0, 255, 15, dtype=np.uint8), cv2.COLORMAP_HSV)
 BALL_COLOR = (255, 255, 255)  # White
 NON_PLAYER_COLOR = (128, 128, 128) # Gray
 
 def draw_annotations(frame, players, ball_position, team_assignments, team_colors=None, player_positions=None):
+    import cv2
+    import numpy as np
     """
     Draws all annotations on a frame of the match.
 
