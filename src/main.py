@@ -138,7 +138,14 @@ def export_results(output_dir, players, events, video_path, cfg, team_possession
         json.dump(summary, f, indent=2)
     print(f"Done. Results saved in {output_dir}")
 
-def run_analysis(video_path, output_dir, model_path, config, generate_llm_report=False):
+def run_analysis(video_path, output_dir, model_path, config, generate_llm_report=False, progress_callback=None):
+    # --- Progress Logging Setup ---
+    def log(message):
+        if progress_callback:
+            progress_callback(message)
+        else:
+            print(message)
+
     os.makedirs(output_dir, exist_ok=True)
     cfg = config
     detector = Detector(model_name=model_path)
@@ -148,15 +155,16 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
 
     output_video_path = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(video_path))[0]}_annotated.avi")
-    # Using MJPG codec for maximum compatibility
     video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'MJPG'), fps / cfg.get('frame_skip', 1), (width, height))
 
     # --- Single-Pass Analysis with In-Memory Annotation ---
-    print("Starting single-pass analysis...")
-    results_iter = detector.detect(video_path, show=False)
+    log("Phase 1/2 : Analyse de la détection et du suivi...")
+    # Disable verbose logging from the detector and manually create logs for the UI
+    results_iter = detector.detect(video_path, show=False, verbose=False)
 
     players = {}
     team_assignments = {}
@@ -175,6 +183,11 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     for frame_idx, res in enumerate(results_iter):
         if frame_idx % frame_skip != 0:
             continue
+
+        # --- Real-time progress logging for Streamlit ---
+        log_msg = f"Frame {frame_idx}/{total_frames} - {res.speed['preprocess']:.1f}ms pre-process, {res.speed['inference']:.1f}ms inference, {res.speed['postprocess']:.1f}ms post-process"
+        log(log_msg)
+
         last_frame_idx = frame_idx
         frame_bgr = res.orig_img
         persons, balls = parse_frame_results(res, detector)
@@ -258,7 +271,7 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     active_players = {pid: data for pid, data in players.items() if pid not in non_player_ids}
 
     # --- Annotation Pass ---
-    print("Starting annotation pass...")
+    log("Phase 2/2 : Annotation de la vidéo...")
     cap = cv2.VideoCapture(video_path)
     frame_idx = 0
     annotation_idx = 0
@@ -309,7 +322,17 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     cap.release()
     video_writer.release()
 
-    print(f"Annotated video saved to {output_video_path}")
+    log(f"Vidéo annotée sauvegardée : {output_video_path}")
     total_duration = last_frame_idx / fps
-    print(f"Finished processing. Found {len(active_players)} stable player tracks.")
+    log(f"Analyse terminée. {len(active_players)} joueurs suivis avec succès.")
+
     export_results(output_dir, active_players, events, video_path, cfg, team_possession_seconds, total_duration, team_stats_history, generate_llm_report)
+
+    # Return paths to the results for the web app
+    results = {
+        "annotated_video": output_video_path,
+        "player_stats": os.path.join(output_dir, 'players_stats.csv'),
+        "team_stats": os.path.join(output_dir, 'team_stats.csv'),
+        "events": os.path.join(output_dir, 'events.csv')
+    }
+    return results
