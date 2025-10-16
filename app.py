@@ -101,7 +101,7 @@ if uploaded_file:
         progress_bar.progress(100, "Analyse terminée !")
         st.session_state.results = results
         st.session_state.analysis_done = True
-        st.experimental_rerun()
+        st.rerun()
 
 # --- Interactive Player ---
 if st.session_state.analysis_done and st.session_state.results:
