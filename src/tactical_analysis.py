@@ -1,9 +1,8 @@
 import os
-# import openai
-# import numpy as np
+import openai
+import numpy as np
 
 def analyze_team_shape(player_positions, frame_height):
-    import numpy as np
     """
     Analyzes the team's defensive block based on player positions.
 
@@ -66,7 +65,6 @@ def format_data_for_llm(team_stats_df, player_stats_df, events_df):
     return prompt
 
 def generate_tactical_report(team_stats_df, player_stats_df, events_df):
-    import openai
     """
     Generates a tactical report using an LLM.
 

@@ -1,154 +1,161 @@
 import streamlit as st
 import os
 import tempfile
-# import pandas as pd
-
-# We defer heavy imports to prevent memory issues on startup (Render free tier)
-# import cv2
-# from src.main import run_analysis
-# from main import DEFAULT_CONFIG
+import json
+import cv2
+import numpy as np
+import pandas as pd
+from src.main import run_analysis
+from main import DEFAULT_CONFIG
+from src.visualization import draw_annotations
 
 st.set_page_config(page_title="Analyseur de Match de Football", layout="wide")
 
-st.title("⚽ Analyseur de Match de Football")
-
-st.write(
-    "Téléversez une vidéo d'un match de football pour obtenir une analyse détaillée, "
-    "incluant les statistiques des joueurs, des équipes et une vidéo annotée."
-)
+st.title("⚽ Analyseur de Match de Football Interactif")
 
 # --- Session State Initialization ---
 if 'analysis_done' not in st.session_state:
     st.session_state.analysis_done = False
 if 'results' not in st.session_state:
     st.session_state.results = None
-if 'video_bytes' not in st.session_state:
-    st.session_state.video_bytes = None
+if 'video_path' not in st.session_state:
+    st.session_state.video_path = None
 
+# --- Main App Logic ---
+uploaded_file = st.file_uploader("Choisissez une vidéo...", type=["mp4", "mov", 'avi'])
 
-uploaded_file = st.file_uploader("Choisissez une vidéo...", type=["mp4", "mov", "avi"])
+if uploaded_file:
+    st.session_state.video_path = os.path.join(tempfile.gettempdir(), uploaded_file.name)
+    with open(st.session_state.video_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
 
-if uploaded_file is not None:
+    st.video(st.session_state.video_path)
+
+    # --- Analysis Quality Selector ---
+    quality_options = {
+        "⚡ Rapide (1 image / 15)": 15,
+        "👌 Équilibrée (1 image / 8)": 8,
+        "🔬 Détaillée (1 image / 2)": 2
+    }
+    selected_quality = st.radio(
+        "Qualité de l'analyse (influe sur la vitesse):",
+        options=list(quality_options.keys()),
+        index=1,
+        horizontal=True,
+    )
+    frame_skip = quality_options[selected_quality]
+
     if st.button("Lancer l'analyse"):
         st.session_state.analysis_done = False
         st.session_state.results = None
-        st.session_state.video_bytes = None
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            video_path = os.path.join(temp_dir, uploaded_file.name)
-            with open(video_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-
             output_dir = os.path.join(temp_dir, "output")
             os.makedirs(output_dir, exist_ok=True)
 
-            # --- UI for progress ---
-            st.subheader("📈 Progression de l'analyse")
             log_placeholder = st.empty()
             progress_bar = st.progress(0)
             log_messages = []
 
             def progress_callback(message):
-                # Update logs
                 log_messages.append(message)
-                log_placeholder.text_area("Logs en temps réel", "\n".join(log_messages), height=300)
-
-                # Update progress bar
+                log_placeholder.text_area("Logs:", "\n".join(log_messages), height=200)
                 if "Frame" in message and "/" in message:
                     try:
                         frame_part = message.split(" ")[1]
-                        current_frame, total_frames = map(int, frame_part.split('/'))
-                        # Phase 1 is detection/tracking (approx. 80% of the work)
-                        progress_percent = int((current_frame / total_frames) * 80)
-                        progress_bar.progress(progress_percent)
+                        current, total = map(int, frame_part.split('/'))
+                        progress_bar.progress(int((current / total) * 100))
                     except (ValueError, IndexError):
-                        pass # Ignore parsing errors
-                elif "Phase 2/2" in message:
-                    progress_bar.progress(85)
-                elif "Analyse terminée" in message:
-                    progress_bar.progress(100)
+                        pass
 
-            with st.spinner("Analyse en cours... Cette opération peut prendre plusieurs minutes."):
-                # --- Deferred imports ---
-                from src.main import run_analysis
-                from main import DEFAULT_CONFIG
-
-                model_path = 'models/yolov8n.pt'
-                if not os.path.exists(model_path):
-                    st.error(f"Le modèle YOLO est introuvable : {model_path}")
-                    st.stop()
+            with st.spinner("Analyse en cours..."):
+                current_config = DEFAULT_CONFIG.copy()
+                current_config['frame_skip'] = frame_skip
 
                 results = run_analysis(
-                    video_path=video_path,
+                    video_path=st.session_state.video_path,
                     output_dir=output_dir,
-                    model_path=model_path,
-                    config=DEFAULT_CONFIG,
-                    generate_llm_report=False,
+                    model_path='models/yolov8n.pt',
+                    config=current_config,
                     progress_callback=progress_callback
                 )
-
-                # Store results in session state
                 st.session_state.results = results
                 st.session_state.analysis_done = True
-
-                # Pre-load video bytes to display after rerun
-                with open(results['annotated_video'], 'rb') as f:
-                    st.session_state.video_bytes = f.read()
-
-        # Trigger a rerun to display results cleanly
         st.experimental_rerun()
 
-# --- Display Results after analysis is done ---
+# --- Interactive Player ---
 if st.session_state.analysis_done and st.session_state.results:
-    import pandas as pd
-    st.success("✅ Analyse terminée avec succès !")
-    st.balloons()
+    st.success("Analyse terminée ! Utilisez les contrôles ci-dessous pour explorer la vidéo.")
 
-    results = st.session_state.results
+    # Load analysis data
+    with open(st.session_state.results['annotations_data']) as f:
+        analysis_data = json.load(f)
 
-    st.subheader("🎬 Vidéo Annotée")
-    st.video(st.session_state.video_bytes)
-    st.download_button(
-        label="Télécharger la vidéo annotée (.avi)",
-        data=st.session_state.video_bytes,
-        file_name=os.path.basename(results['annotated_video'])
-    )
+    annotations = analysis_data['annotations_by_frame']
 
-    # --- Display DataFrames and provide download buttons ---
-    tabs = st.tabs(["Statistiques des Équipes", "Statistiques des Joueurs", "Journal des Événements"])
+    # --- Interactive Controls ---
+    st.sidebar.header("Contrôles d'affichage")
+    show_boxes = st.sidebar.checkbox("Afficher le suivi des joueurs", True)
+    show_team_shape = st.sidebar.checkbox("Afficher la forme tactique", True)
 
+    # --- Video Player ---
+    cap = cv2.VideoCapture(st.session_state.video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    selected_frame_idx = st.slider("Naviguer dans la vidéo", 0, total_frames - 1, 0)
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, selected_frame_idx)
+    ret, frame = cap.read()
+
+    if ret:
+        # Find the corresponding annotation data
+        # The index in `annotations` corresponds to the processed frame number
+        analysis_frame_skip = analysis_data.get('frame_skip', 1)
+        annotation_idx = selected_frame_idx // analysis_frame_skip
+
+        if annotation_idx < len(annotations):
+            ann_data = annotations[annotation_idx]
+
+            # Prepare data for the drawing function
+            players_to_draw = ann_data.get('players', {}) if show_boxes else {}
+            ball_pos = ann_data.get('ball_pos')
+
+            # Get team assignments and colors from the root of analysis_data
+            team_assignments = analysis_data['team_assignments']
+            team_colors = analysis_data['team_colors']
+
+            # Prepare team shape data if requested
+            player_positions_for_shape = {}
+            if show_team_shape:
+                for pid, p_data in ann_data.get('players', {}).items():
+                    if p_data.get('center'):
+                        player_positions_for_shape[pid] = p_data['center']
+
+            # Draw the annotations on the frame
+            annotated_frame = draw_annotations(
+                frame,
+                players_to_draw,
+                ball_pos,
+                team_assignments,
+                team_colors,
+                player_positions_for_shape
+            )
+            st.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB), use_column_width=True)
+        else:
+            # If no annotation for this frame, show the original
+            st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_column_width=True)
+
+    cap.release()
+
+    # --- Display stats ---
+    st.subheader("Statistiques de l'analyse")
+    tabs = st.tabs(["Équipes", "Joueurs", "Événements"])
     with tabs[0]:
-        if os.path.exists(results['team_stats']):
-            team_df = pd.read_csv(results['team_stats'])
-            st.dataframe(team_df)
-            st.download_button(
-                label="Télécharger les stats des équipes (.csv)",
-                data=team_df.to_csv(index=False).encode('utf-8'),
-                file_name='team_stats.csv'
-            )
-        else:
-            st.warning("Aucune statistique d'équipe n'a été générée.")
-
+        st.dataframe(pd.read_csv(st.session_state.results['team_stats']))
     with tabs[1]:
-        if os.path.exists(results['player_stats']):
-            player_df = pd.read_csv(results['player_stats'])
-            st.dataframe(player_df)
-            st.download_button(
-                label="Télécharger les stats des joueurs (.csv)",
-                data=player_df.to_csv(index=False).encode('utf-8'),
-                file_name='player_stats.csv'
-            )
-        else:
-            st.warning("Aucune statistique de joueur n'a été générée.")
-
+        st.dataframe(pd.read_csv(st.session_state.results['player_stats']))
     with tabs[2]:
-        if os.path.exists(results['events']) and os.path.getsize(results['events']) > 0:
-            events_df = pd.read_csv(results['events'])
-            st.dataframe(events_df)
-            st.download_button(
-                label="Télécharger le journal des événements (.csv)",
-                data=events_df.to_csv(index=False).encode('utf-8'),
-                file_name='events.csv'
-            )
+        if os.path.exists(st.session_state.results['events']) and os.path.getsize(st.session_state.results['events']) > 0:
+            st.dataframe(pd.read_csv(st.session_state.results['events']))
         else:
-            st.info("Aucun événement (passe, tir, etc.) n'a été détecté.")
+            st.info("Aucun événement majeur détecté.")

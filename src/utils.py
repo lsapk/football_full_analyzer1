@@ -1,12 +1,9 @@
 import math
-# import cv2
-# import numpy as np
-# from sklearn.cluster import KMeans
+import cv2
+import numpy as np
+from sklearn.cluster import KMeans
 
 def get_dominant_color(image, box, k=3):
-    import cv2
-    import numpy as np
-    from sklearn.cluster import KMeans
     """
     Finds the dominant color in a cropped region of an image using K-Means clustering.
     The crop focuses on the player's torso to better identify jersey color.

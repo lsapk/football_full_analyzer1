@@ -1,4 +1,6 @@
 import os
+from ultralytics import YOLO
+import torch
 
 class Detector:
     def __init__(self, model_name):
@@ -8,9 +10,6 @@ class Detector:
         Args:
             model_name (str): The path to the YOLO model file (e.g., 'models/yolov8n.pt').
         """
-        import torch
-        from ultralytics import YOLO
-
         self.model_name = model_name
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f"Initializing YOLO model: {self.model_name} on device: {self.device}")
@@ -24,7 +23,7 @@ class Detector:
         # Updated to access class names directly from the model object as per recent ultralytics versions
         self.names = self.model.names
 
-    def detect(self, source, show=False, classes=None, verbose=True):
+    def detect(self, source, show=False, classes=None):
         """
         Runs the object detection and tracking on a video source.
 

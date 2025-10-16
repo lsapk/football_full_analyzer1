@@ -1,17 +1,16 @@
 import os, json, time
-# import cv2
-# import numpy as np
-# import pandas as pd
-# from .detector import Detector
-# from .tracker import parse_frame_results
-# from .utils import box_center, pixel_distance, speed_kmh, get_dominant_color
-# from .events import EventManager
-# from .visualization import draw_annotations
-# from . import stats
-# from . import tactical_analysis
+import cv2
+import numpy as np
+import pandas as pd
+from .detector import Detector
+from .tracker import parse_frame_results
+from .utils import box_center, pixel_distance, speed_kmh, get_dominant_color
+from .events import EventManager
+from .visualization import draw_annotations
+from . import stats
+from . import tactical_analysis
 
 def assign_teams_by_color(players, player_colors, min_samples=3):
-    import numpy as np
     """
     Assigns teams to players based on the dominant color of their jerseys.
 
@@ -44,7 +43,6 @@ def assign_teams_by_color(players, player_colors, min_samples=3):
     return team_assignments, team_color_map
 
 def find_ball_owner(ball, persons):
-    from .utils import box_center, pixel_distance
     owner = None
     if not ball or not persons: return None
     bx, by = box_center(ball['box'])
@@ -74,8 +72,6 @@ def filter_players(players, min_positions=10, min_distance_m=20, goalkeeper_ids=
     return non_player_ids
 
 def export_results(output_dir, players, events, video_path, cfg, team_possession_seconds, total_time_seconds, team_stats_history, generate_llm_report=False):
-    import pandas as pd
-    from . import tactical_analysis
     team_names = cfg.get('team_names', {})
 
     # --- Export Player Stats ---
@@ -143,25 +139,12 @@ def export_results(output_dir, players, events, video_path, cfg, team_possession
     print(f"Done. Results saved in {output_dir}")
 
 def run_analysis(video_path, output_dir, model_path, config, generate_llm_report=False, progress_callback=None):
-    import cv2
-    import numpy as np
-    from .detector import Detector
-    from .tracker import parse_frame_results
-    from .utils import box_center, get_dominant_color
-    from .events import EventManager
-    from .visualization import draw_annotations
-    from . import stats
-    from . import tactical_analysis
-
-    # --- Progress Logging Setup ---
-    def log(message):
-        if progress_callback:
-            progress_callback(message)
-        else:
-            print(message)
-
     os.makedirs(output_dir, exist_ok=True)
     cfg = config
+
+    # Allow overriding frame_skip from the UI
+    frame_skip = cfg.get('frame_skip', 1)
+
     detector = Detector(model_name=model_path)
     event_manager = EventManager(cfg)
 
@@ -169,16 +152,15 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
 
     output_video_path = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(video_path))[0]}_annotated.avi")
+    # Using MJPG codec for maximum compatibility
     video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'MJPG'), fps / cfg.get('frame_skip', 1), (width, height))
 
     # --- Single-Pass Analysis with In-Memory Annotation ---
-    log("Phase 1/2 : Analyse de la détection et du suivi...")
-    # Disable verbose logging from the detector and manually create logs for the UI
-    results_iter = detector.detect(video_path, show=False, verbose=False)
+    print("Starting single-pass analysis...")
+    results_iter = detector.detect(video_path, show=False)
 
     players = {}
     team_assignments = {}
@@ -197,11 +179,6 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     for frame_idx, res in enumerate(results_iter):
         if frame_idx % frame_skip != 0:
             continue
-
-        # --- Real-time progress logging for Streamlit ---
-        log_msg = f"Frame {frame_idx}/{total_frames} - {res.speed['preprocess']:.1f}ms pre-process, {res.speed['inference']:.1f}ms inference, {res.speed['postprocess']:.1f}ms post-process"
-        log(log_msg)
-
         last_frame_idx = frame_idx
         frame_bgr = res.orig_img
         persons, balls = parse_frame_results(res, detector)
@@ -284,69 +261,44 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
 
     active_players = {pid: data for pid, data in players.items() if pid not in non_player_ids}
 
-    # --- Annotation Pass ---
-    log("Phase 2/2 : Annotation de la vidéo...")
-    cap = cv2.VideoCapture(video_path)
-    frame_idx = 0
-    annotation_idx = 0
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if frame_idx % frame_skip == 0 and annotation_idx < len(annotations_to_draw):
-            ann = annotations_to_draw[annotation_idx]
-            # Update team assignments with the final filtered list
-            ann['team_assignments'] = team_assignments
+    # --- Save analysis data for interactive player ---
+    final_data = {
+        'annotations_by_frame': annotations_to_draw,
+        'team_assignments': team_assignments,
+        'team_colors': team_colors,
+        'non_player_ids': non_player_ids,
+        'frame_height': height,
+        'frame_width': width,
+        'fps': fps,
+        'frame_skip': frame_skip,
+        'config': cfg
+    }
 
-            y_offset = 30
-            # Prepare data for tactical and visual annotation for the CURRENT frame
-            current_frame_player_positions = {}
-            for pid, p_data in ann['players'].items():
-                if p_data.get('center'):
-                    current_frame_player_positions[pid] = p_data['center']
+    annotations_path = os.path.join(output_dir, 'annotations.json')
+    with open(annotations_path, 'w') as f:
+        # Using a custom encoder to handle numpy types
+        class NumpyEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, np.integer):
+                    return int(obj)
+                if isinstance(obj, np.floating):
+                    return float(obj)
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                return super(NumpyEncoder, self).default(obj)
+        json.dump(final_data, f, cls=NumpyEncoder)
 
-            if teams_identified:
-                # Calculate team stats using the final player data (for compactness)
-                current_team_stats = stats.calculate_team_stats(players, team_assignments, cfg.get('pixels_to_meters'))
+    print(f"Annotation data saved to {annotations_path}")
 
-                # Group current frame positions by team for tactical analysis
-                team_positions_current_frame = {}
-                for pid, pos in current_frame_player_positions.items():
-                    team_id = team_assignments.get(pid)
-                    if team_id is not None and team_id != 'non_player':
-                        team_positions_current_frame.setdefault(team_id, []).append(pos)
-
-                for team_id, team_data in current_team_stats.items():
-                    if team_id is None or team_id == 'non_player': continue
-                    compactness = team_data.get('compactness', 0)
-                    team_name = cfg['team_names'].get(str(team_id), f"Team {team_id}")
-                    block_status = "N/A"
-                    if team_id in team_positions_current_frame:
-                        block_status = tactical_analysis.analyze_team_shape(team_positions_current_frame[team_id], height)
-                    text = f"{team_name}: Compactness: {compactness:.2f}m | Block: {block_status}"
-                    cv2.putText(frame, text, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
-                    y_offset += 30
-
-            # Pass current frame positions to the drawing function
-            ann['player_positions'] = current_frame_player_positions
-            annotated_frame = draw_annotations(frame, ann['players'], ann['ball_pos'], ann['team_assignments'], team_colors, ann.get('player_positions', {}))
-            video_writer.write(annotated_frame)
-            annotation_idx += 1
-        frame_idx += 1
-    cap.release()
-    video_writer.release()
-
-    log(f"Vidéo annotée sauvegardée : {output_video_path}")
     total_duration = last_frame_idx / fps
-    log(f"Analyse terminée. {len(active_players)} joueurs suivis avec succès.")
-
+    print(f"Finished processing. Found {len(active_players)} stable player tracks.")
     export_results(output_dir, active_players, events, video_path, cfg, team_possession_seconds, total_duration, team_stats_history, generate_llm_report)
 
-    # Return paths to the results for the web app
-    results = {
-        "annotated_video": output_video_path,
+    # Return paths to all results for the web app
+    return {
+        "annotations_data": annotations_path,
         "player_stats": os.path.join(output_dir, 'players_stats.csv'),
         "team_stats": os.path.join(output_dir, 'team_stats.csv'),
-        "events": os.path.join(output_dir, 'events.csv')
+        "events": os.path.join(output_dir, 'events.csv'),
+        "video_path": video_path
     }
-    return results

@@ -1,10 +1,8 @@
-# import numpy as np
+import numpy as np
 from .utils import pixel_distance, speed_kmh
-# from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import pdist, squareform
 
 def calculate_team_compactness(player_positions):
-    import numpy as np
-    from scipy.spatial.distance import pdist
     """
     Calculates the team compactness based on the average distance between players.
     A lower value means the team is more compact.
@@ -23,7 +21,6 @@ def update_player_movement(player_data, player_obj, frame_idx, fps, cfg):
     Updates a single player's position, distance, and speed based on their movement.
     This modifies the player_data dictionary in place.
     """
-    # from .utils import pixel_distance, speed_kmh # Already imported at top level
     cx, cy = player_obj['center']
     player_data['positions'].append((frame_idx, cx, cy))
 
