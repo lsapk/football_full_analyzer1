@@ -262,10 +262,19 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     active_players = {pid: data for pid, data in players.items() if pid not in non_player_ids}
 
     # --- Save analysis data for interactive player ---
+
+    # Convert all numpy int keys to string for JSON compatibility
+    string_keyed_team_assignments = {str(k): v for k, v in team_assignments.items()}
+    string_keyed_team_colors = {str(k): v for k, v in team_colors.items()}
+
+    for frame_data in annotations_to_draw:
+        if 'players' in frame_data and frame_data['players']:
+            frame_data['players'] = {str(k): v for k, v in frame_data['players'].items()}
+
     final_data = {
         'annotations_by_frame': annotations_to_draw,
-        'team_assignments': team_assignments,
-        'team_colors': team_colors,
+        'team_assignments': string_keyed_team_assignments,
+        'team_colors': string_keyed_team_colors,
         'non_player_ids': non_player_ids,
         'frame_height': height,
         'frame_width': width,
