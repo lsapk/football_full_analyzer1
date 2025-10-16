@@ -130,7 +130,7 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     if progress_callback:
         progress_callback(f"Phase 1/2 : Analyse de la détection et du suivi (total frames: {total_frames})...")
 
-    results_iter = detector.detect(video_path, show=False, verbose=False)
+    results_iter = detector.detect(video_path, show=False)
     players, team_assignments, team_colors, player_color_samples, initial_player_positions = {}, {}, {}, {}, {}
     events, team_stats_history, team_possession_seconds = [], [], {}
     last_owner_pid = None
