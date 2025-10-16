@@ -25,88 +25,80 @@ if 'video_path' not in st.session_state:
 uploaded_file = st.file_uploader("Choisissez une vidéo...", type=["mp4", "mov", 'avi'])
 
 if uploaded_file:
-    st.session_state.video_path = os.path.join(tempfile.gettempdir(), uploaded_file.name)
+    # Use a persistent path for the video file
+    temp_dir = tempfile.gettempdir()
+    st.session_state.video_path = os.path.join(temp_dir, uploaded_file.name)
     with open(st.session_state.video_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
     st.video(st.session_state.video_path)
 
     # --- Analysis Quality Selector ---
-    quality_options = {
-        "⚡ Rapide (1 image / 15)": 15,
-        "👌 Équilibrée (1 image / 8)": 8,
-        "🔬 Détaillée (1 image / 2)": 2
-    }
-    selected_quality = st.radio(
-        "Qualité de l'analyse (influe sur la vitesse):",
-        options=list(quality_options.keys()),
-        index=1,
-        horizontal=True,
-    )
+    quality_options = {"⚡ Rapide (1 image / 15)": 15, "👌 Équilibrée (1 image / 8)": 8, "🔬 Détaillée (1 image / 2)": 2}
+    selected_quality = st.radio("Qualité de l'analyse:", options=list(quality_options.keys()), index=1, horizontal=True)
     frame_skip = quality_options[selected_quality]
 
     if st.button("Lancer l'analyse"):
         st.session_state.analysis_done = False
         st.session_state.results = None
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_dir = os.path.join(temp_dir, "output")
-            os.makedirs(output_dir, exist_ok=True)
+        # Create a persistent output directory based on video name
+        video_name = os.path.splitext(uploaded_file.name)[0]
+        output_dir = os.path.join(temp_dir, f"output_{video_name}")
+        os.makedirs(output_dir, exist_ok=True)
 
-            log_placeholder = st.empty()
-            progress_bar = st.progress(0)
-            log_messages = []
+        log_container = st.container()
+        log_container.header("📈 Progression de l'analyse")
+        progress_bar = log_container.progress(0)
+        log_area = log_container.empty()
+        log_messages = []
 
-            log_placeholder = st.empty()
-            progress_bar = st.progress(0)
-            log_messages = []
+        current_config = DEFAULT_CONFIG.copy()
+        current_config['frame_skip'] = frame_skip
 
-            # The analysis function is now a generator
-            analysis_generator = run_analysis(
-                video_path=st.session_state.video_path,
-                output_dir=output_dir,
-                model_path='models/yolov8n.pt',
-                config=current_config
-            )
+        analysis_generator = run_analysis(
+            video_path=st.session_state.video_path,
+            output_dir=output_dir,
+            model_path='models/yolov8n.pt',
+            config=current_config
+        )
 
-            final_results = None
-            for message in analysis_generator:
-                if isinstance(message, dict):
-                    final_results = message
-                    break
+        final_results = None
+        for message in analysis_generator:
+            if isinstance(message, dict):
+                final_results = message
+                progress_bar.progress(100)
+                break
 
-                log_messages.append(str(message))
-                log_placeholder.text_area("Logs:", "\n".join(log_messages), height=200)
+            log_messages.append(str(message))
+            log_area.text_area("Logs:", "\n".join(log_messages), height=250)
 
-                # Update progress bar based on logs
-                if "Frame" in str(message) and "/" in str(message):
-                    try:
-                        frame_part = str(message).split(" ")[1]
-                        current, total = map(int, frame_part.split('/'))
-                        progress_bar.progress(int((current / total) * 100))
-                    except (ValueError, IndexError):
-                        pass
+            if "Frame" in str(message) and "/" in str(message):
+                try:
+                    frame_part = str(message).split(" ")[1]
+                    current, total = map(int, frame_part.split('/'))
+                    progress_percent = int((current / total) * 100)
+                    progress_bar.progress(progress_percent)
+                except (ValueError, IndexError):
+                    pass
 
-            st.session_state.results = final_results
-            st.session_state.analysis_done = True
+        st.session_state.results = final_results
+        st.session_state.analysis_done = True
         st.experimental_rerun()
 
 # --- Interactive Player ---
 if st.session_state.analysis_done and st.session_state.results:
     st.success("Analyse terminée ! Utilisez les contrôles ci-dessous pour explorer la vidéo.")
 
-    # Load analysis data
     with open(st.session_state.results['annotations_data']) as f:
         analysis_data = json.load(f)
 
     annotations = analysis_data['annotations_by_frame']
 
-    # --- Interactive Controls ---
     st.sidebar.header("Contrôles d'affichage")
     show_boxes = st.sidebar.checkbox("Afficher le suivi des joueurs", True)
     show_team_shape = st.sidebar.checkbox("Afficher la forme tactique", True)
 
-    # --- Video Player ---
     cap = cv2.VideoCapture(st.session_state.video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
@@ -116,46 +108,25 @@ if st.session_state.analysis_done and st.session_state.results:
     ret, frame = cap.read()
 
     if ret:
-        # Find the corresponding annotation data
-        # The index in `annotations` corresponds to the processed frame number
         analysis_frame_skip = analysis_data.get('frame_skip', 1)
         annotation_idx = selected_frame_idx // analysis_frame_skip
 
         if annotation_idx < len(annotations):
             ann_data = annotations[annotation_idx]
+            team_assignments = analysis_data['team_assignments']
+            team_colors = {str(k): tuple(v) for k, v in analysis_data['team_colors'].items()}
 
-            # Prepare data for the drawing function
             players_to_draw = ann_data.get('players', {}) if show_boxes else {}
             ball_pos = ann_data.get('ball_pos')
+            player_positions_for_shape = {pid: p_data['center'] for pid, p_data in ann_data.get('players', {}).items() if p_data.get('center')} if show_team_shape else {}
 
-            # Get team assignments and colors from the root of analysis_data
-            team_assignments = analysis_data['team_assignments']
-            team_colors = analysis_data['team_colors']
-
-            # Prepare team shape data if requested
-            player_positions_for_shape = {}
-            if show_team_shape:
-                for pid, p_data in ann_data.get('players', {}).items():
-                    if p_data.get('center'):
-                        player_positions_for_shape[pid] = p_data['center']
-
-            # Draw the annotations on the frame
-            annotated_frame = draw_annotations(
-                frame,
-                players_to_draw,
-                ball_pos,
-                team_assignments,
-                team_colors,
-                player_positions_for_shape
-            )
+            annotated_frame = draw_annotations(frame, players_to_draw, ball_pos, team_assignments, team_colors, player_positions_for_shape)
             st.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB), use_column_width=True)
         else:
-            # If no annotation for this frame, show the original
             st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_column_width=True)
 
     cap.release()
 
-    # --- Display stats ---
     st.subheader("Statistiques de l'analyse")
     tabs = st.tabs(["Équipes", "Joueurs", "Événements"])
     with tabs[0]:
