@@ -114,7 +114,7 @@ def export_results(output_dir, players, events, video_path, cfg, team_possession
     with open(os.path.join(output_dir, 'summary.json'), 'w') as f: json.dump(summary, f, indent=2)
     print(f"Done. Results saved in {output_dir}")
 
-def run_analysis(video_path, output_dir, model_path, config, generate_llm_report=False):
+def run_analysis(video_path, output_dir, model_path, config, generate_llm_report=False, progress_callback=None):
     os.makedirs(output_dir, exist_ok=True)
     cfg = config
     frame_skip = cfg.get('frame_skip', 1)
@@ -126,23 +126,31 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
-    yield f"Phase 1/2 : Analyse de la détection et du suivi (total frames: {total_frames})..."
+
+    if progress_callback:
+        progress_callback(f"Phase 1/2 : Analyse de la détection et du suivi (total frames: {total_frames})...")
+
     results_iter = detector.detect(video_path, show=False, verbose=False)
     players, team_assignments, team_colors, player_color_samples, initial_player_positions = {}, {}, {}, {}, {}
     events, team_stats_history, team_possession_seconds = [], [], {}
     last_owner_pid = None
     annotations_to_draw = []
     last_frame_idx = 0
+
     for frame_idx, res in enumerate(results_iter):
         if frame_idx % frame_skip != 0: continue
         log_msg = f"Frame {frame_idx}/{total_frames} - {res.speed['preprocess']:.1f}ms pre-process, {res.speed['inference']:.1f}ms inference, {res.speed['postprocess']:.1f}ms post-process"
-        yield log_msg
+        if progress_callback:
+            progress_callback(log_msg)
+
         last_frame_idx = frame_idx
         frame_bgr = res.orig_img
         persons, balls = parse_frame_results(res, detector)
+
         for p in persons:
             pid = p.get('id')
             if pid and pid not in players: players[pid] = {'touches': 0, 'positions': [], 'dist_pixels': 0.0, 'last_pos': None, 'last_frame': None, 'max_speed_kmh': 0.0, 'team': None, 'last_box': None}
+
         if not team_assignments:
             for p in persons:
                 pid = p.get('id')
@@ -150,49 +158,67 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
                     color = get_dominant_color(frame_bgr, p['box'])
                     if color: player_color_samples.setdefault(pid, []).append(color)
                     initial_player_positions.setdefault(pid, []).append(box_center(p['box']))
+
             if frame_idx > frame_skip * cfg.get('team_clustering_sample_frames', 20):
                 team_assignments, team_colors = assign_teams_by_color(players, player_color_samples)
                 if team_assignments:
                     team_ids = set(team_assignments.values())
                     team_possession_seconds = {team_id: 0 for team_id in team_ids if team_id is not None}
+
         for p in persons:
             p['center'] = box_center(p['box'])
             pid = p.get('id')
             if pid and pid in players: stats.update_player_movement(players[pid], p, frame_idx, fps, cfg)
+
         ball = balls[0] if balls else None
         owner = find_ball_owner(ball, persons)
         current_owner_pid = owner['id'] if owner else None
+
         if team_assignments and current_owner_pid and current_owner_pid in players:
             players[current_owner_pid]['touches'] += 1
             owner_team = players[current_owner_pid].get('team')
             if owner_team in team_possession_seconds: team_possession_seconds[owner_team] += (frame_skip / fps)
+
         new_events = event_manager.update(frame_idx, players, ball, last_owner_pid, current_owner_pid)
         events.extend(new_events)
         last_owner_pid = current_owner_pid
+
         current_annotations = {'players': {}, 'ball_pos': None, 'team_assignments': team_assignments.copy()}
         for p in persons:
             pid = p.get('id')
             if pid in players: current_annotations['players'][pid] = {'last_box': p['box'], 'center': p.get('center')}
         if balls: current_annotations['ball_pos'] = box_center(balls[0]['box'])
         annotations_to_draw.append(current_annotations)
+
     goalkeeper_ids = []
     if team_assignments and initial_player_positions:
         team_0_players = {pid: pos for pid, pos in initial_player_positions.items() if players.get(pid, {}).get('team') == 0}
         team_1_players = {pid: pos for pid, pos in initial_player_positions.items() if players.get(pid, {}).get('team') == 1}
         if team_0_players: goalkeeper_ids.append(min(team_0_players.keys(), key=lambda pid: np.mean([p[0] for p in team_0_players[pid]])))
         if team_1_players: goalkeeper_ids.append(max(team_1_players.keys(), key=lambda pid: np.mean([p[0] for p in team_1_players[pid]])))
+
     non_player_ids = filter_players(players, min_positions=cfg.get('min_player_positions', 10), min_distance_m=cfg.get('min_distance_m_for_player', 20), goalkeeper_ids=goalkeeper_ids)
     for pid in non_player_ids:
         if pid in team_assignments: team_assignments[pid] = 'non_player'
+
     active_players = {pid: data for pid, data in players.items() if pid not in non_player_ids}
-    yield "Phase 2/2 : Sauvegarde des données d'analyse..."
+
+    if progress_callback:
+        progress_callback("Phase 2/2 : Sauvegarde des données d'analyse...")
+
     final_data = {'annotations_by_frame': annotations_to_draw, 'team_assignments': team_assignments, 'team_colors': team_colors, 'non_player_ids': non_player_ids, 'frame_height': height, 'frame_width': width, 'fps': fps, 'frame_skip': frame_skip, 'config': cfg}
     sanitized_data = convert_keys_to_str_recursive(final_data)
     annotations_path = os.path.join(output_dir, 'annotations.json')
     with open(annotations_path, 'w') as f:
         json.dump(sanitized_data, f, cls=NumpyEncoder)
-    yield f"Données d'annotation sauvegardées : {annotations_path}"
+
+    if progress_callback:
+        progress_callback(f"Données d'annotation sauvegardées : {annotations_path}")
+
     total_duration = last_frame_idx / fps
-    yield f"Analyse terminée. {len(active_players)} joueurs suivis avec succès."
+    if progress_callback:
+        progress_callback(f"Analyse terminée. {len(active_players)} joueurs suivis avec succès.")
+
     export_results(output_dir, active_players, events, video_path, cfg, team_possession_seconds, total_duration, team_stats_history, generate_llm_report)
-    yield {"annotations_data": annotations_path, "player_stats": os.path.join(output_dir, 'players_stats.csv'), "team_stats": os.path.join(output_dir, 'team_stats.csv'), "events": os.path.join(output_dir, 'events.csv'), "video_path": video_path}
+
+    return {"annotations_data": annotations_path, "player_stats": os.path.join(output_dir, 'players_stats.csv'), "team_stats": os.path.join(output_dir, 'team_stats.csv'), "events": os.path.join(output_dir, 'events.csv'), "video_path": video_path}

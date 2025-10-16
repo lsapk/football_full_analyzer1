@@ -6,8 +6,21 @@ import cv2
 import numpy as np
 import pandas as pd
 from src.main import run_analysis
-from main import DEFAULT_CONFIG
 from src.visualization import draw_annotations
+
+# --- Default Configuration ---
+DEFAULT_CONFIG = {
+    "frame_skip": 2,
+    "inactive_game_frame_limit": 50,
+    "min_player_positions": 15,
+    "pixels_to_meters": 0.1,
+    "team_clustering_sample_frames": 20,
+    "team_names": {
+        "0": "Équipe A",
+        "1": "Équipe B"
+    },
+    "ocr_interval": 25
+}
 
 st.set_page_config(page_title="Analyseur de Match de Football", layout="wide")
 
@@ -49,40 +62,44 @@ if uploaded_file:
 
         log_container = st.container()
         log_container.header("📈 Progression de l'analyse")
-        progress_bar = log_container.progress(0)
+        progress_bar = log_container.progress(0, "Démarrage...")
         log_area = log_container.empty()
         log_messages = []
 
         current_config = DEFAULT_CONFIG.copy()
         current_config['frame_skip'] = frame_skip
 
-        analysis_generator = run_analysis(
+        def progress_callback(message):
+            """Callback pour mettre à jour l'interface Streamlit."""
+            log_messages.append(message)
+            # Affiche les 15 derniers messages
+            log_output = "\n".join(log_messages[-15:])
+            log_area.code(log_output, language='bash')
+
+            if "Phase 1/2" in message:
+                 progress_bar.progress(0, "Phase 1/2 : Analyse vidéo...")
+            elif "Frame" in message and "/" in message:
+                try:
+                    # Extrait la progression depuis le message de log
+                    frame_part = message.split(" ")[1]
+                    current, total = map(int, frame_part.split('/'))
+                    percent_complete = int((current / total) * 100)
+                    progress_bar.progress(percent_complete, f"Phase 1/2 : Analyse Vidéo ({percent_complete}%)")
+                except (ValueError, IndexError):
+                    pass # Ignore les messages de log qui ne correspondent pas
+            elif "Phase 2/2" in message:
+                progress_bar.progress(95, "Phase 2/2 : Finalisation...")
+
+        results = run_analysis(
             video_path=st.session_state.video_path,
             output_dir=output_dir,
             model_path='models/yolov8n.pt',
-            config=current_config
+            config=current_config,
+            progress_callback=progress_callback
         )
 
-        final_results = None
-        for message in analysis_generator:
-            if isinstance(message, dict):
-                final_results = message
-                progress_bar.progress(100)
-                break
-
-            log_messages.append(str(message))
-            log_area.text_area("Logs:", "\n".join(log_messages), height=250)
-
-            if "Frame" in str(message) and "/" in str(message):
-                try:
-                    frame_part = str(message).split(" ")[1]
-                    current, total = map(int, frame_part.split('/'))
-                    progress_percent = int((current / total) * 100)
-                    progress_bar.progress(progress_percent)
-                except (ValueError, IndexError):
-                    pass
-
-        st.session_state.results = final_results
+        progress_bar.progress(100, "Analyse terminée !")
+        st.session_state.results = results
         st.session_state.analysis_done = True
         st.experimental_rerun()
 
