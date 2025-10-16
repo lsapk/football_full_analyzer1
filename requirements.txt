@@ -1,8 +1,9 @@
 ultralytics>=8.0.20
-opencv-python-headless
+opencv-python
 numpy
 pandas
 scikit-learn
 scipy
 openai
 streamlit
+pyngrok
