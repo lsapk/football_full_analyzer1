@@ -57,30 +57,38 @@ if uploaded_file:
             progress_bar = st.progress(0)
             log_messages = []
 
-            def progress_callback(message):
-                log_messages.append(message)
+            log_placeholder = st.empty()
+            progress_bar = st.progress(0)
+            log_messages = []
+
+            # The analysis function is now a generator
+            analysis_generator = run_analysis(
+                video_path=st.session_state.video_path,
+                output_dir=output_dir,
+                model_path='models/yolov8n.pt',
+                config=current_config
+            )
+
+            final_results = None
+            for message in analysis_generator:
+                if isinstance(message, dict):
+                    final_results = message
+                    break
+
+                log_messages.append(str(message))
                 log_placeholder.text_area("Logs:", "\n".join(log_messages), height=200)
-                if "Frame" in message and "/" in message:
+
+                # Update progress bar based on logs
+                if "Frame" in str(message) and "/" in str(message):
                     try:
-                        frame_part = message.split(" ")[1]
+                        frame_part = str(message).split(" ")[1]
                         current, total = map(int, frame_part.split('/'))
                         progress_bar.progress(int((current / total) * 100))
                     except (ValueError, IndexError):
                         pass
 
-            with st.spinner("Analyse en cours..."):
-                current_config = DEFAULT_CONFIG.copy()
-                current_config['frame_skip'] = frame_skip
-
-                results = run_analysis(
-                    video_path=st.session_state.video_path,
-                    output_dir=output_dir,
-                    model_path='models/yolov8n.pt',
-                    config=current_config,
-                    progress_callback=progress_callback
-                )
-                st.session_state.results = results
-                st.session_state.analysis_done = True
+            st.session_state.results = final_results
+            st.session_state.analysis_done = True
         st.experimental_rerun()
 
 # --- Interactive Player ---

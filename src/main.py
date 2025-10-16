@@ -138,13 +138,10 @@ def export_results(output_dir, players, events, video_path, cfg, team_possession
         json.dump(summary, f, indent=2)
     print(f"Done. Results saved in {output_dir}")
 
-def run_analysis(video_path, output_dir, model_path, config, generate_llm_report=False, progress_callback=None):
+def run_analysis(video_path, output_dir, model_path, config, generate_llm_report=False):
     os.makedirs(output_dir, exist_ok=True)
     cfg = config
-
-    # Allow overriding frame_skip from the UI
     frame_skip = cfg.get('frame_skip', 1)
-
     detector = Detector(model_name=model_path)
     event_manager = EventManager(cfg)
 
@@ -154,13 +151,8 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
-    output_video_path = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(video_path))[0]}_annotated.avi")
-    # Using MJPG codec for maximum compatibility
-    video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'MJPG'), fps / cfg.get('frame_skip', 1), (width, height))
-
-    # --- Single-Pass Analysis with In-Memory Annotation ---
-    print("Starting single-pass analysis...")
-    results_iter = detector.detect(video_path, show=False)
+    yield f"Phase 1/2 : Analyse de la détection et du suivi (total frames: {total_frames})..."
+    results_iter = detector.detect(video_path, show=False, verbose=False)
 
     players = {}
     team_assignments = {}
@@ -179,6 +171,10 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     for frame_idx, res in enumerate(results_iter):
         if frame_idx % frame_skip != 0:
             continue
+
+        log_msg = f"Frame {frame_idx}/{total_frames} - {res.speed['preprocess']:.1f}ms pre-process, {res.speed['inference']:.1f}ms inference, {res.speed['postprocess']:.1f}ms post-process"
+        yield log_msg
+
         last_frame_idx = frame_idx
         frame_bgr = res.orig_img
         persons, balls = parse_frame_results(res, detector)
@@ -262,19 +258,25 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     active_players = {pid: data for pid, data in players.items() if pid not in non_player_ids}
 
     # --- Save analysis data for interactive player ---
+    yield "Phase 2/2 : Sauvegarde des données d'analyse..."
 
     # Convert all numpy int keys to string for JSON compatibility
-    string_keyed_team_assignments = {str(k): v for k, v in team_assignments.items()}
-    string_keyed_team_colors = {str(k): v for k, v in team_colors.items()}
+    # This needs to be done on the final version of the dictionaries
+    final_team_assignments = {str(k): v for k, v in team_assignments.items()}
+    final_team_colors = {str(k): v for k, v in team_colors.items()}
 
     for frame_data in annotations_to_draw:
         if 'players' in frame_data and frame_data['players']:
             frame_data['players'] = {str(k): v for k, v in frame_data['players'].items()}
+        # IMPORTANT: Ensure the team_assignments inside each frame is also string-keyed
+        if 'team_assignments' in frame_data:
+             frame_data['team_assignments'] = {str(k): v for k, v in frame_data['team_assignments'].items()}
+
 
     final_data = {
         'annotations_by_frame': annotations_to_draw,
-        'team_assignments': string_keyed_team_assignments,
-        'team_colors': string_keyed_team_colors,
+        'team_assignments': final_team_assignments,
+        'team_colors': final_team_colors,
         'non_player_ids': non_player_ids,
         'frame_height': height,
         'frame_width': width,
@@ -285,26 +287,25 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
 
     annotations_path = os.path.join(output_dir, 'annotations.json')
     with open(annotations_path, 'w') as f:
-        # Using a custom encoder to handle numpy types
         class NumpyEncoder(json.JSONEncoder):
             def default(self, obj):
-                if isinstance(obj, np.integer):
+                if isinstance(obj, (np.integer, np.int32, np.int64)):
                     return int(obj)
-                if isinstance(obj, np.floating):
+                if isinstance(obj, (np.floating, np.float32, np.float64)):
                     return float(obj)
                 if isinstance(obj, np.ndarray):
                     return obj.tolist()
                 return super(NumpyEncoder, self).default(obj)
         json.dump(final_data, f, cls=NumpyEncoder)
 
-    print(f"Annotation data saved to {annotations_path}")
+    yield f"Données d'annotation sauvegardées : {annotations_path}"
 
     total_duration = last_frame_idx / fps
-    print(f"Finished processing. Found {len(active_players)} stable player tracks.")
+    yield f"Analyse terminée. {len(active_players)} joueurs suivis avec succès."
     export_results(output_dir, active_players, events, video_path, cfg, team_possession_seconds, total_duration, team_stats_history, generate_llm_report)
 
-    # Return paths to all results for the web app
-    return {
+    # Yield the final results dictionary
+    yield {
         "annotations_data": annotations_path,
         "player_stats": os.path.join(output_dir, 'players_stats.csv'),
         "team_stats": os.path.join(output_dir, 'team_stats.csv'),
