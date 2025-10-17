@@ -86,23 +86,39 @@ def export_results(output_dir, players, events, video_path, cfg, team_possession
     events_path = os.path.join(output_dir, 'events.csv')
     if not events_df.empty: events_df.to_csv(events_path, index=False)
     team_stats_df = pd.DataFrame()
-    if not player_df.empty and 'team_id' in player_df.columns:
-        history_df = pd.DataFrame([{'team_id': team_id, **data} for frame_stats in team_stats_history for team_id, data in frame_stats.items()])
-        if not history_df.empty:
-            avg_compactness = history_df.groupby('team_id')['compactness'].mean().round(2)
-            team_stats_df = pd.DataFrame(index=avg_compactness.index)
-            team_stats_df['avg_compactness_m'] = avg_compactness
-            possession_series = pd.Series(team_possession_seconds, name='possession_seconds')
-            if total_time_seconds > 0: team_stats_df['possession_pct'] = round((possession_series / total_time_seconds) * 100, 2)
-            team_stats_df['total_distance_m'] = player_df.groupby('team_id')['distance_m'].sum()
-            if not events_df.empty:
-                event_counts = events_df.groupby(['team_id', 'type']).size().unstack(fill_value=0)
-                event_counts.columns = [f"{col}s" for col in event_counts.columns]
-                team_stats_df = team_stats_df.join(event_counts)
-            team_stats_df.fillna(0, inplace=True)
-            team_stats_df['team_name'] = team_stats_df.index.map(lambda x: team_names.get(str(x), f"Team {x}"))
-            team_stats_path = os.path.join(output_dir, 'team_stats.csv')
-            team_stats_df.to_csv(team_stats_path, index_label='team_id')
+    if not player_df.empty and 'team_id' in player_df.columns and any(player_df['team_id'].notna()):
+        # Initialize team_stats_df with teams from player data
+        valid_teams = player_df[player_df['team_id'].notna()]['team_id'].unique()
+        team_stats_df = pd.DataFrame(index=valid_teams)
+        team_stats_df.index.name = 'team_id'
+
+        # Calculate avg_compactness from history
+        if team_stats_history:
+            history_df = pd.DataFrame([{'team_id': team_id, **data} for frame_stats in team_stats_history for team_id, data in frame_stats.items()])
+            if not history_df.empty:
+                avg_compactness = history_df.groupby('team_id')['compactness'].mean().round(2)
+                team_stats_df['avg_compactness_m'] = avg_compactness
+
+        # Calculate possession
+        possession_series = pd.Series(team_possession_seconds, name='possession_seconds')
+        if total_time_seconds > 0:
+            team_stats_df['possession_pct'] = round((possession_series / total_time_seconds) * 100, 2)
+
+        # Calculate total distance
+        team_stats_df['total_distance_m'] = player_df.groupby('team_id')['distance_m'].sum()
+
+        # Calculate event counts
+        if not events_df.empty and 'team_id' in events_df.columns:
+            event_counts = events_df.groupby(['team_id', 'type']).size().unstack(fill_value=0)
+            event_counts.columns = [f"{col.lower()}s" for col in event_counts.columns]
+            team_stats_df = team_stats_df.join(event_counts)
+
+        team_stats_df.fillna(0, inplace=True)
+        team_stats_df['team_name'] = team_stats_df.index.map(lambda x: team_names.get(str(x), f"Team {x}"))
+
+        # Save to CSV
+        team_stats_path = os.path.join(output_dir, 'team_stats.csv')
+        team_stats_df.to_csv(team_stats_path)
     if generate_llm_report:
         if not team_stats_df.empty and not player_df.empty:
             report = tactical_analysis.generate_tactical_report(team_stats_df, player_df, events_df)
@@ -182,6 +198,22 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
         new_events = event_manager.update(frame_idx, players, ball, last_owner_pid, current_owner_pid)
         events.extend(new_events)
         last_owner_pid = current_owner_pid
+
+        # Tactical Analysis for Team Stats
+        if team_assignments:
+            team_positions = {team_id: [] for team_id in set(team_assignments.values()) if team_id != 'non_player'}
+            for pid, p_data in players.items():
+                team_id = p_data.get('team')
+                if team_id in team_positions and p_data.get('last_pos'):
+                    team_positions[team_id].append(p_data['last_pos'])
+
+            frame_team_stats = {}
+            for team_id, positions in team_positions.items():
+                if len(positions) > 2:
+                    compactness = tactical_analysis.calculate_compactness(positions, cfg.get('pixels_to_meters', 0.1))
+                    frame_team_stats[team_id] = {'compactness': compactness}
+            if frame_team_stats:
+                team_stats_history.append(frame_team_stats)
 
         current_annotations = {'players': {}, 'ball_pos': None, 'team_assignments': team_assignments.copy()}
         for p in persons:

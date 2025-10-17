@@ -138,9 +138,9 @@ if st.session_state.analysis_done and st.session_state.results:
             player_positions_for_shape = {pid: p_data['center'] for pid, p_data in ann_data.get('players', {}).items() if p_data.get('center')} if show_team_shape else {}
 
             annotated_frame = draw_annotations(frame, players_to_draw, ball_pos, team_assignments, team_colors, player_positions_for_shape)
-            st.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB), use_column_width=True)
+            st.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB), use_container_width=True)
         else:
-            st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_column_width=True)
+            st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
 
     cap.release()
 
