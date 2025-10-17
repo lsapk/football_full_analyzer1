@@ -1,6 +1,33 @@
 import os
 import openai
 import numpy as np
+from scipy.spatial import ConvexHull
+
+def calculate_compactness(player_positions, pixels_to_meters):
+    """
+    Calculates the team's compactness based on the area of their convex hull.
+
+    Args:
+        player_positions (list): A list of (x, y) coordinates for a single team.
+        pixels_to_meters (float): The conversion factor from pixels to meters.
+
+    Returns:
+        float: The area of the convex hull in square meters, or 0 if not calculable.
+    """
+    if len(player_positions) < 3:
+        return 0.0
+
+    try:
+        # Create a Convex Hull from the player positions
+        hull = ConvexHull(player_positions)
+        # Calculate the area of the hull in square pixels
+        area_pixels = hull.volume
+        # Convert the area to square meters
+        area_meters = area_pixels * (pixels_to_meters ** 2)
+        return area_meters
+    except Exception:
+        # This can happen if all points are collinear
+        return 0.0
 
 def analyze_team_shape(player_positions, frame_height):
     """
