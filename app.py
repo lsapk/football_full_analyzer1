@@ -93,7 +93,7 @@ if uploaded_file:
         results = run_analysis(
             video_path=st.session_state.video_path,
             output_dir=output_dir,
-            model_path='models/yolov8n.pt',
+            model_path='models/yolov8n-obb.pt', # Using a smaller, potentially faster model
             config=current_config,
             progress_callback=progress_callback
         )
@@ -103,55 +103,60 @@ if uploaded_file:
         st.session_state.analysis_done = True
         st.rerun()
 
-# --- Interactive Player ---
+# --- Video Player and Statistics ---
 if st.session_state.analysis_done and st.session_state.results:
-    st.success("Analyse terminée ! Utilisez les contrôles ci-dessous pour explorer la vidéo.")
+    st.success("Analyse terminée ! La vidéo annotée est prête.")
 
-    with open(st.session_state.results['annotations_data']) as f:
-        analysis_data = json.load(f)
+    # Define the output path for the annotated video
+    video_name = os.path.splitext(os.path.basename(st.session_state.video_path))[0]
+    output_dir = os.path.dirname(st.session_state.results['annotations_data'])
+    annotated_video_path = os.path.join(output_dir, f"{video_name}_annotated.avi")
 
-    annotations = analysis_data['annotations_by_frame']
+    # Check if video already exists
+    if not os.path.exists(annotated_video_path):
+        with st.spinner("Génération de la vidéo annotée... (cela peut prendre quelques minutes)"):
+            # Generate the annotated video
+            from src.visualization import generate_annotated_video
+            generate_annotated_video(
+                st.session_state.video_path,
+                annotated_video_path,
+                st.session_state.results['annotations_data']
+            )
 
-    st.sidebar.header("Contrôles d'affichage")
-    show_boxes = st.sidebar.checkbox("Afficher le suivi des joueurs", True)
-    show_team_shape = st.sidebar.checkbox("Afficher la forme tactique", True)
+    st.video(annotated_video_path)
 
-    cap = cv2.VideoCapture(st.session_state.video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    with open(annotated_video_path, "rb") as file:
+        st.download_button(
+            label="Télécharger la vidéo annotée",
+            data=file,
+            file_name=os.path.basename(annotated_video_path),
+            mime="video/avi"
+        )
 
-    selected_frame_idx = st.slider("Naviguer dans la vidéo", 0, total_frames - 1, 0)
+    st.subheader("Statistiques de l'Analyse")
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, selected_frame_idx)
-    ret, frame = cap.read()
+    # --- Display Statistics ---
+    try:
+        team_stats_df = pd.read_csv(st.session_state.results['team_stats'])
+        player_stats_df = pd.read_csv(st.session_state.results['player_stats'])
+        events_df = pd.read_csv(st.session_state.results['events']) if os.path.exists(st.session_state.results['events']) and os.path.getsize(st.session_state.results['events']) > 0 else pd.DataFrame()
 
-    if ret:
-        analysis_frame_skip = analysis_data.get('frame_skip', 1)
-        annotation_idx = selected_frame_idx // analysis_frame_skip
+        tab1, tab2, tab3 = st.tabs(["Statistiques par Équipe", "Statistiques par Joueur", "Chronologie des Événements"])
 
-        if annotation_idx < len(annotations):
-            ann_data = annotations[annotation_idx]
-            team_assignments = analysis_data['team_assignments']
-            team_colors = {str(k): tuple(v) for k, v in analysis_data['team_colors'].items()}
+        with tab1:
+            st.header("Statistiques par Équipe")
+            st.dataframe(team_stats_df, height=200, use_container_width=True)
+        with tab2:
+            st.header("Statistiques par Joueur")
+            st.dataframe(player_stats_df, height=400, use_container_width=True)
+        with tab3:
+            st.header("Chronologie des Événements")
+            if not events_df.empty:
+                st.dataframe(events_df, height=400, use_container_width=True)
+            else:
+                st.info("Aucun événement majeur (passe, tir) n'a été détecté.")
 
-            players_to_draw = ann_data.get('players', {}) if show_boxes else {}
-            ball_pos = ann_data.get('ball_pos')
-            player_positions_for_shape = {pid: p_data['center'] for pid, p_data in ann_data.get('players', {}).items() if p_data.get('center')} if show_team_shape else {}
-
-            annotated_frame = draw_annotations(frame, players_to_draw, ball_pos, team_assignments, team_colors, player_positions_for_shape)
-            st.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB), use_container_width=True)
-        else:
-            st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
-
-    cap.release()
-
-    st.subheader("Statistiques de l'analyse")
-    tabs = st.tabs(["Équipes", "Joueurs", "Événements"])
-    with tabs[0]:
-        st.dataframe(pd.read_csv(st.session_state.results['team_stats']))
-    with tabs[1]:
-        st.dataframe(pd.read_csv(st.session_state.results['player_stats']))
-    with tabs[2]:
-        if os.path.exists(st.session_state.results['events']) and os.path.getsize(st.session_state.results['events']) > 0:
-            st.dataframe(pd.read_csv(st.session_state.results['events']))
-        else:
-            st.info("Aucun événement majeur détecté.")
+    except FileNotFoundError:
+        st.error("Un fichier de statistiques n'a pas été trouvé. Veuillez relancer l'analyse.")
+    except Exception as e:
+        st.error(f"Une erreur est survenue lors de l'affichage des statistiques : {e}")

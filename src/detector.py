@@ -25,17 +25,9 @@ class Detector:
 
     def detect(self, source, show=False, classes=None):
         """
-        Runs the object detection and tracking on a video source.
-
-        Args:
-            source (str): Path to the video file.
-            show (bool): If True, displays the video with annotations.
-            classes (list): A list of class IDs to filter for (e.g., [0] for persons).
-
-        Returns:
-            An iterator for the tracking results.
+        Runs object detection and tracking on a video source with performance optimizations.
         """
-        # Using a custom tracker configuration optimized for football
+        # Performance optimizations: half-precision and smaller image size
         return self.model.track(
             source=source,
             tracker='football-tracker.yaml',
@@ -43,5 +35,7 @@ class Detector:
             device=self.device,
             show=show,
             stream=True,
-            classes=classes
+            classes=classes,
+            half=True,       # Use FP16 for faster inference
+            imgsz=640        # Resize input frames for faster processing
         )

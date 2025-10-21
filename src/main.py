@@ -77,48 +77,61 @@ def filter_players(players, min_positions=10, min_distance_m=20, goalkeeper_ids=
     return non_player_ids
 
 def export_results(output_dir, players, events, video_path, cfg, team_possession_seconds, total_time_seconds, team_stats_history, generate_llm_report=False):
-    team_names = cfg.get('team_names', {})
-    player_rows = [{'player_id': pid, 'number': d.get('number'), 'team_id': d.get('team'), 'team_name': team_names.get(str(d.get('team')), f"Team {d.get('team')}"), 'touches': d.get('touches'), 'distance_m': round(d.get('dist_pixels', 0.0) * cfg.get('pixels_to_meters', 0.1), 2), 'max_speed_kmh': round(d.get('max_speed_kmh', 0.0), 2)} for pid, d in players.items()]
+    team_names = cfg.get('team_names', {"0": "Team A", "1": "Team B"})
+    pixels_to_meters = cfg.get('pixels_to_meters', 0.1)
+
+    # --- Player Statistics ---
+    player_rows = []
+    events_df = pd.DataFrame(events) if events else pd.DataFrame(columns=['type', 'player_id'])
+
+    for pid, d in players.items():
+        player_events = events_df[events_df['player_id'] == pid]
+        row = {
+            'ID Joueur': pid,
+            'Numéro': d.get('number', 'N/A'),
+            'Équipe': team_names.get(str(d.get('team')), f"Équipe {d.get('team')}"),
+            'Touches': d.get('touches', 0),
+            'Passes': player_events[player_events['type'] == 'PASS'].shape[0],
+            'Tirs': player_events[player_events['type'] == 'SHOT'].shape[0],
+            'Distance (m)': round(d.get('dist_pixels', 0.0) * pixels_to_meters, 2),
+            'Vitesse Max (km/h)': round(d.get('max_speed_kmh', 0.0), 2)
+        }
+        player_rows.append(row)
+
     player_df = pd.DataFrame(player_rows)
     player_stats_path = os.path.join(output_dir, 'players_stats.csv')
     player_df.to_csv(player_stats_path, index=False)
-    events_df = pd.DataFrame(events) if events else pd.DataFrame()
-    events_path = os.path.join(output_dir, 'events.csv')
-    if not events_df.empty: events_df.to_csv(events_path, index=False)
+
+    # --- Team Statistics ---
     team_stats_df = pd.DataFrame()
-    if not player_df.empty and 'team_id' in player_df.columns and any(player_df['team_id'].notna()):
-        # Initialize team_stats_df with teams from player data
-        valid_teams = player_df[player_df['team_id'].notna()]['team_id'].unique()
-        team_stats_df = pd.DataFrame(index=valid_teams)
-        team_stats_df.index.name = 'team_id'
+    if not player_df.empty and 'Équipe' in player_df.columns:
+        # Use team names for grouping
+        team_df = player_df.groupby('Équipe').agg({
+            'Touches': 'sum',
+            'Passes': 'sum',
+            'Tirs': 'sum',
+            'Distance (m)': 'sum'
+        })
+
+        # Calculate possession
+        if total_time_seconds > 0:
+            possession_pct = {team_names.get(str(k), f"Équipe {k}"): round((v / total_time_seconds) * 100, 2) for k, v in team_possession_seconds.items()}
+            team_df['Possession (%)'] = team_df.index.map(possession_pct).fillna(0)
 
         # Calculate avg_compactness from history
         if team_stats_history:
-            history_df = pd.DataFrame([{'team_id': team_id, **data} for frame_stats in team_stats_history for team_id, data in frame_stats.items()])
+            # Map team_id to team_name before calculating stats
+            history_df = pd.DataFrame([{'team_name': team_names.get(str(team_id)), **data}
+                                       for frame_stats in team_stats_history
+                                       for team_id, data in frame_stats.items()])
             if not history_df.empty:
-                avg_compactness = history_df.groupby('team_id')['compactness'].mean().round(2)
-                team_stats_df['avg_compactness_m'] = avg_compactness
+                avg_compactness = history_df.groupby('team_name')['compactness'].mean().round(2)
+                team_df['Compacité Moyenne (m)'] = avg_compactness
 
-        # Calculate possession
-        possession_series = pd.Series(team_possession_seconds, name='possession_seconds')
-        if total_time_seconds > 0:
-            team_stats_df['possession_pct'] = round((possession_series / total_time_seconds) * 100, 2)
+        team_stats_df = team_df.reset_index().rename(columns={'index': 'Équipe'})
 
-        # Calculate total distance
-        team_stats_df['total_distance_m'] = player_df.groupby('team_id')['distance_m'].sum()
-
-        # Calculate event counts
-        if not events_df.empty and 'team_id' in events_df.columns:
-            event_counts = events_df.groupby(['team_id', 'type']).size().unstack(fill_value=0)
-            event_counts.columns = [f"{col.lower()}s" for col in event_counts.columns]
-            team_stats_df = team_stats_df.join(event_counts)
-
-        team_stats_df.fillna(0, inplace=True)
-        team_stats_df['team_name'] = team_stats_df.index.map(lambda x: team_names.get(str(x), f"Team {x}"))
-
-        # Save to CSV
-        team_stats_path = os.path.join(output_dir, 'team_stats.csv')
-        team_stats_df.to_csv(team_stats_path)
+    team_stats_path = os.path.join(output_dir, 'team_stats.csv')
+    team_stats_df.to_csv(team_stats_path, index=False)
     if generate_llm_report:
         if not team_stats_df.empty and not player_df.empty:
             report = tactical_analysis.generate_tactical_report(team_stats_df, player_df, events_df)
@@ -153,19 +166,28 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
     annotations_to_draw = []
     last_frame_idx = 0
 
-    for frame_idx, res in enumerate(results_iter):
-        if frame_idx % frame_skip != 0: continue
-        log_msg = f"Frame {frame_idx}/{total_frames} - {res.speed['preprocess']:.1f}ms pre-process, {res.speed['inference']:.1f}ms inference, {res.speed['postprocess']:.1f}ms post-process"
-        if progress_callback:
-            progress_callback(log_msg)
+    # --- Main Analysis Loop ---
+    if results_iter:
+        for frame_idx, res in enumerate(results_iter):
+            try:
+                if frame_idx % frame_skip != 0:
+                    continue
 
-        last_frame_idx = frame_idx
-        frame_bgr = res.orig_img
-        persons, balls = parse_frame_results(res, detector)
+                log_msg = f"Frame {frame_idx}/{total_frames} - Vitesse: {res.speed['preprocess']:.1f}ms pre-process, {res.speed['inference']:.1f}ms inférence, {res.speed['postprocess']:.1f}ms post-process"
+                if progress_callback:
+                    progress_callback(log_msg)
 
-        for p in persons:
-            pid = p.get('id')
-            if pid and pid not in players: players[pid] = {'touches': 0, 'positions': [], 'dist_pixels': 0.0, 'last_pos': None, 'last_frame': None, 'max_speed_kmh': 0.0, 'team': None, 'last_box': None}
+                last_frame_idx = frame_idx
+                frame_bgr = res.orig_img
+                persons, balls = parse_frame_results(res, detector)
+
+                for p in persons:
+                    pid = p.get('id')
+                    if pid and pid not in players:
+                        players[pid] = {'touches': 0, 'positions': [], 'dist_pixels': 0.0, 'last_pos': None, 'last_frame': None, 'max_speed_kmh': 0.0, 'team': None, 'last_box': None}
+            except Exception as e:
+                print(f"Erreur à l'image {frame_idx}: {e}")
+                continue # Skip corrupted frames
 
         if not team_assignments:
             for p in persons:

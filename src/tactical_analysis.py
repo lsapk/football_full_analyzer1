@@ -5,29 +5,19 @@ from scipy.spatial import ConvexHull
 
 def calculate_compactness(player_positions, pixels_to_meters):
     """
-    Calculates the team's compactness based on the area of their convex hull.
-
-    Args:
-        player_positions (list): A list of (x, y) coordinates for a single team.
-        pixels_to_meters (float): The conversion factor from pixels to meters.
-
-    Returns:
-        float: The area of the convex hull in square meters, or 0 if not calculable.
+    Calculates team compactness based on the average distance between all pairs of players.
+    A lower value indicates a more compact team shape.
     """
-    if len(player_positions) < 3:
+    if len(player_positions) < 2:
         return 0.0
 
-    try:
-        # Create a Convex Hull from the player positions
-        hull = ConvexHull(player_positions)
-        # Calculate the area of the hull in square pixels
-        area_pixels = hull.volume
-        # Convert the area to square meters
-        area_meters = area_pixels * (pixels_to_meters ** 2)
-        return area_meters
-    except Exception:
-        # This can happen if all points are collinear
-        return 0.0
+    # Calculate the pairwise distances between all players
+    from scipy.spatial.distance import pdist
+    distances = pdist(player_positions)
+
+    # Convert average pixel distance to meters
+    avg_distance_meters = np.mean(distances) * pixels_to_meters
+    return avg_distance_meters
 
 def analyze_team_shape(player_positions, frame_height):
     """
