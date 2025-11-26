@@ -9,6 +9,7 @@ from .events import EventManager
 from .visualization import draw_annotations
 from . import stats
 from . import tactical_analysis
+from . import database
 
 def convert_keys_to_str_recursive(obj):
     """Recursively converts all keys in a nested dictionary to strings."""
@@ -100,85 +101,92 @@ def filter_players(players, min_positions=10, min_distance_m=20, goalkeeper_ids=
             non_player_ids.append(pid)
     return non_player_ids
 
-def export_results(output_dir, players, events, video_path, cfg, team_possession_seconds, total_time_seconds, team_stats_history, generate_llm_report=False):
+def format_and_save_results(output_dir, players, events, video_path, cfg, team_possession_seconds, total_time_seconds, team_stats_history):
+    """Formats the analysis results into DataFrames and saves them to an SQLite database."""
     team_names = cfg.get('team_names', {"0": "Team A", "1": "Team B"})
     pixels_to_meters = cfg.get('pixels_to_meters', 0.1)
+    db_path = os.path.join(output_dir, 'analysis.db')
+    video_name = os.path.basename(video_path)
 
-    # --- Player Statistics ---
+    # --- 1. Events DataFrame ---
+    events_df = pd.DataFrame(events)
+    if not events_df.empty:
+        # Normalize coordinates
+        frame_width = cfg.get('frame_width', 1)
+        frame_height = cfg.get('frame_height', 1)
+
+        start_pos_df = pd.DataFrame(events_df['start_pos'].tolist(), index=events_df.index)
+        end_pos_df = pd.DataFrame(events_df['end_pos'].tolist(), index=events_df.index)
+
+        events_df['start_x'] = (start_pos_df[0] / frame_width) * 105
+        events_df['start_y'] = 68 - ((start_pos_df[1] / frame_height) * 68) # Inverser l'axe Y
+        events_df['end_x'] = (end_pos_df[0] / frame_width) * 105
+        events_df['end_y'] = 68 - ((end_pos_df[1] / frame_height) * 68) # Inverser l'axe Y
+
+        # Map team ID to name
+        events_df['team_name'] = events_df['team_id'].map(team_names)
+        # Rename and select final columns
+        events_df = events_df.rename(columns={'type': 'event_type'})
+        events_df = events_df[['frame', 'event_type', 'team_name', 'player_id', 'start_x', 'start_y', 'end_x', 'end_y']]
+
+    # --- 2. Player Statistics DataFrame ---
     player_rows = []
-    events_df = pd.DataFrame(events) if events else pd.DataFrame(columns=['type', 'player_id'])
-
     for pid, d in players.items():
-        player_events = events_df[events_df['player_id'] == pid]
+        player_events = events_df[events_df['player_id'] == pid] if not events_df.empty else pd.DataFrame()
         row = {
-            'ID Joueur': pid,
-            'Numéro': d.get('number', 'N/A'),
-            'Équipe': team_names.get(str(d.get('team')), f"Équipe {d.get('team')}"),
-            'Touches': d.get('touches', 0),
-            'Passes': player_events[player_events['type'] == 'PASS'].shape[0],
-            'Tirs': player_events[player_events['type'] == 'SHOT'].shape[0],
-            'Distance (m)': round(d.get('dist_pixels', 0.0) * pixels_to_meters, 2),
-            'Vitesse Max (km/h)': round(d.get('max_speed_kmh', 0.0), 2)
+            'player_id': pid,
+            'team_name': team_names.get(str(d.get('team')), f"Team {d.get('team')}"),
+            'touches': d.get('touches', 0),
+            'passes': player_events[player_events['event_type'] == 'pass'].shape[0] if not player_events.empty else 0,
+            'shots': player_events[player_events['event_type'] == 'shot'].shape[0] if not player_events.empty else 0,
+            'distance_m': round(d.get('dist_pixels', 0.0) * pixels_to_meters, 2),
+            'max_speed_kmh': round(d.get('max_speed_kmh', 0.0), 2)
         }
         player_rows.append(row)
+    players_df = pd.DataFrame(player_rows)
 
-    player_df = pd.DataFrame(player_rows)
-    player_stats_path = os.path.join(output_dir, 'players_stats.csv')
-    player_df.to_csv(player_stats_path, index=False)
-
-    # --- Team Statistics ---
-    team_stats_df = pd.DataFrame()
-    if not player_df.empty and 'Équipe' in player_df.columns:
-        # Use team names for grouping
-        team_df = player_df.groupby('Équipe').agg({
-            'Touches': 'sum',
-            'Passes': 'sum',
-            'Tirs': 'sum',
-            'Distance (m)': 'sum'
-        })
+    # --- 3. Team Statistics DataFrame ---
+    teams_df = pd.DataFrame()
+    if not players_df.empty:
+        team_summary = players_df.groupby('team_name').agg(
+            total_passes=('passes', 'sum'),
+            total_shots=('shots', 'sum')
+        ).reset_index()
 
         # Calculate possession
         if total_time_seconds > 0:
-            possession_pct = {team_names.get(str(k), f"Équipe {k}"): round((v / total_time_seconds) * 100, 2) for k, v in team_possession_seconds.items()}
-            team_df['Possession (%)'] = team_df.index.map(possession_pct).fillna(0)
+            possession_pct = {name: round((team_possession_seconds.get(int(tid), 0) / total_time_seconds) * 100, 2) for tid, name in team_names.items()}
+            team_summary['possession_pct'] = team_summary['team_name'].map(possession_pct).fillna(0)
 
-        # Calculate avg_compactness from history
+        # Calculate avg_compactness
         if team_stats_history:
-            # Map team_id to team_name before calculating stats
-            history_df = pd.DataFrame([{'team_name': team_names.get(str(team_id)), **data}
-                                       for frame_stats in team_stats_history
-                                       for team_id, data in frame_stats.items()])
+            history_df = pd.DataFrame([{'team_name': team_names.get(str(team_id)), **data} for frame_stats in team_stats_history for team_id, data in frame_stats.items()])
             if not history_df.empty:
                 avg_compactness = history_df.groupby('team_name')['compactness'].mean().round(2)
-                team_df['Compacité Moyenne (m)'] = avg_compactness
+                team_summary = team_summary.merge(avg_compactness.rename('avg_compactness'), on='team_name', how='left')
 
-        team_stats_df = team_df.reset_index().rename(columns={'index': 'Équipe'})
+        teams_df = team_summary
 
-    team_stats_path = os.path.join(output_dir, 'team_stats.csv')
-    team_stats_df.to_csv(team_stats_path, index=False)
-    if generate_llm_report:
-        if not team_stats_df.empty and not player_df.empty:
-            report = tactical_analysis.generate_tactical_report(team_stats_df, player_df, events_df)
-            report_path = os.path.join(output_dir, 'tactical_report.txt')
-            with open(report_path, 'w') as f: f.write(report)
-            print(f"Tactical report saved to {report_path}")
-        else: print("Skipping LLM report generation due to missing stats.")
-    summary = {'video': os.path.basename(video_path), 'n_players': len(players), 'n_events': len(events)}
-    with open(os.path.join(output_dir, 'summary.json'), 'w') as f: json.dump(summary, f, indent=2)
-    print(f"Done. Results saved in {output_dir}")
+    # --- 4. Save to Database ---
+    database.save_analysis_to_db(db_path, video_name, players_df, teams_df, events_df)
+    print(f"Done. Results saved to {db_path}")
 
 def run_analysis(video_path, output_dir, model_path, config, generate_llm_report=False, progress_callback=None):
     # --- 1. Initial Setup ---
     os.makedirs(output_dir, exist_ok=True)
     cfg = config
     frame_skip = cfg.get('frame_skip', 1)
-    detector = Detector(model_name=model_path)
+
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
+
+    cfg['frame_width'] = width
+    cfg['frame_height'] = height
+    detector = Detector(model_name=model_path)
 
     # --- 2. Phase 1: Data Collection ---
     if progress_callback:
@@ -304,8 +312,8 @@ def run_analysis(video_path, output_dir, model_path, config, generate_llm_report
 
     # Export statistics
     total_duration = last_frame_idx / fps
-    export_results(output_dir, active_players, events, video_path, cfg, team_possession_seconds, total_duration, team_stats_history, generate_llm_report)
+    format_and_save_results(output_dir, active_players, events, video_path, cfg, team_possession_seconds, total_duration, team_stats_history)
 
     if progress_callback: progress_callback(f"Analyse terminée. {len(active_players)} joueurs actifs identifiés.")
 
-    return {"annotations_data": annotations_path, "player_stats": os.path.join(output_dir, 'players_stats.csv'), "team_stats": os.path.join(output_dir, 'team_stats.csv'), "events": os.path.join(output_dir, 'events.csv'), "video_path": video_path}
+    return {"annotations_data": annotations_path, "db_path": os.path.join(output_dir, 'analysis.db'), "video_path": video_path}
