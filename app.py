@@ -93,7 +93,7 @@ if uploaded_file:
         results = run_analysis(
             video_path=st.session_state.video_path,
             output_dir=output_dir,
-            model_path='models/yolov8n-obb.pt', # Using a smaller, potentially faster model
+            model_path='models/yolov8l.pt', # Using a larger, more accurate model
             config=current_config,
             progress_callback=progress_callback
         )
@@ -135,28 +135,4 @@ if st.session_state.analysis_done and st.session_state.results:
 
     st.subheader("Statistiques de l'Analyse")
 
-    # --- Display Statistics ---
-    try:
-        team_stats_df = pd.read_csv(st.session_state.results['team_stats'])
-        player_stats_df = pd.read_csv(st.session_state.results['player_stats'])
-        events_df = pd.read_csv(st.session_state.results['events']) if os.path.exists(st.session_state.results['events']) and os.path.getsize(st.session_state.results['events']) > 0 else pd.DataFrame()
-
-        tab1, tab2, tab3 = st.tabs(["Statistiques par Équipe", "Statistiques par Joueur", "Chronologie des Événements"])
-
-        with tab1:
-            st.header("Statistiques par Équipe")
-            st.dataframe(team_stats_df, height=200, use_container_width=True)
-        with tab2:
-            st.header("Statistiques par Joueur")
-            st.dataframe(player_stats_df, height=400, use_container_width=True)
-        with tab3:
-            st.header("Chronologie des Événements")
-            if not events_df.empty:
-                st.dataframe(events_df, height=400, use_container_width=True)
-            else:
-                st.info("Aucun événement majeur (passe, tir) n'a été détecté.")
-
-    except FileNotFoundError:
-        st.error("Un fichier de statistiques n'a pas été trouvé. Veuillez relancer l'analyse.")
-    except Exception as e:
-        st.error(f"Une erreur est survenue lors de l'affichage des statistiques : {e}")
+    st.info(f"Les données de l'analyse ont été sauvegardées dans la base de données : {st.session_state.results['db_path']}")

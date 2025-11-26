@@ -8,3 +8,6 @@ openai
 streamlit
 pyngrok
 requests
+dash
+plotly
+dash-bootstrap-components
