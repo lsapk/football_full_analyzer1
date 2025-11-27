@@ -1,24 +1,26 @@
 # ⚽ AI Football Analyst
 
-Cette application utilise l'intelligence artificielle pour analyser des courtes vidéos de matchs de football (≤ 5 minutes). Elle détecte et suit les joueurs et le ballon, extrait des statistiques de performance, identifie des événements de jeu clés et génère un rapport tactique automatisé à l'aide d'un Grand Modèle de Langage (LLM).
+Cette application web utilise l'intelligence artificielle pour analyser des vidéos de matchs de football. Elle détecte et suit les joueurs et le ballon, extrait des statistiques de performance, identifie les passes et les tirs, et offre un tableau de bord tactique interactif pour visualiser les résultats.
 
 ## 🚀 Fonctionnalités
 
-- **🎥 Analyse Vidéo Automatisée** : Traite un fichier vidéo pour identifier les joueurs et le ballon.
-- **👥 Identification d'Équipe par Clustering** : Assigne automatiquement les joueurs à deux équipes sans configuration manuelle des couleurs.
-- **📊 Statistiques Complètes** : Calcule des statistiques par joueur (distance, vitesse, touches) et par équipe (possession, compacité, nombre de passes/dribbles).
-- **📹 Vidéo Annotée** : Génère une vidéo de sortie avec les joueurs, leurs trajectoires et la compacité de l'équipe affichés en temps réel.
-- **🧠 Analyse Tactique par IA (Optionnel)** : Utilise un LLM (GPT) pour générer un rapport texte analysant la stratégie des équipes, leurs forces, faiblesses et des suggestions d'amélioration.
-- **💾 Export de Données** : Sauvegarde toutes les statistiques et les événements dans des fichiers CSV pour une analyse plus approfondie.
+- **📊 Dashboard Interactif Unique** : Une seule interface web pour charger une vidéo, lancer l'analyse et explorer les résultats de manière interactive.
+- **🎥 Analyse Vidéo Automatisée** : Traite un fichier vidéo pour identifier les joueurs et le ballon en utilisant le modèle de détection `YOLOv8l`.
+- **👥 Identification d'Équipe par Clustering** : Assigne automatiquement les joueurs à deux équipes en se basant sur la couleur de leur maillot.
+- **📈 Statistiques Complètes** : Calcule des statistiques par joueur (distance, vitesse, touches, passes, tirs) et par équipe (possession, compacité).
+- ** DATABASE SQLite** : Toutes les données de l'analyse (joueurs, équipes, événements) sont stockées dans une base de données SQLite pour une interrogation et une analyse faciles.
+- **🗺️ Visualisation Tactique 2D** : Un terrain de football interactif affiche la position et le déroulement des passes et des tirs.
+- **📹 Vidéo Annotée** : Génère une vidéo de sortie avec les joueurs et leurs mouvements, téléchargeable directement depuis l'interface.
 
 ## 🛠️ Technologies Principales
 
 - **Python**
-- **YOLOv8 & BoT-SORT** : Pour la détection et le suivi des objets.
+- **Dash & Plotly** : Pour le tableau de bord web interactif.
+- **YOLOv8 & ByteTrack** : Pour la détection et le suivi des objets.
 - **OpenCV** : Pour le traitement vidéo.
 - **Pandas & NumPy** : Pour la manipulation et l'analyse des données.
 - **Scikit-learn** : Pour le clustering des équipes.
-- **OpenAI API** : Pour la génération du rapport tactique.
+- **SQLite** : Pour le stockage des données.
 
 ## ⚙️ Installation
 
@@ -39,41 +41,25 @@ Cette application utilise l'intelligence artificielle pour analyser des courtes 
     pip install -r requirements.txt
     ```
 
-4.  **(Optionnel) Pour l'analyse tactique par IA :**
-    Vous devez avoir une clé API d'OpenAI. Définissez-la comme une variable d'environnement :
-    ```bash
-    export OPENAI_API_KEY="votre_cle_api_ici"
-    # Sur Windows (cmd): set OPENAI_API_KEY="votre_cle_api_ici"
-    ```
-
 ## ▶️ Utilisation
 
-Lancez l'analyse avec la commande suivante, en spécifiant le chemin vers votre vidéo.
+1.  **Lancez l'application web :**
+    ```bash
+    python dashboard.py
+    ```
 
-**Commande de base :**
-```bash
-python main.py --video data/votre_video.mp4 --output results
-```
+2.  **Ouvrez votre navigateur :**
+    Rendez-vous à l'adresse [http://127.0.0.1:8050](http://127.0.0.1:8050).
 
-**Avec l'analyse tactique par IA :**
-```bash
-python main.py --video data/votre_video.mp4 --output results --llm
-```
-
-### Arguments
-
-- `--video` : (Requis) Chemin vers le fichier vidéo à analyser.
-- `--output` : (Optionnel) Dossier où sauvegarder les résultats. Par défaut : `output/`.
-- `--model` : (Optionnel) Chemin vers le modèle YOLOv8. Par défaut : `models/yolov8n.pt`.
-- `--llm` : (Optionnel) Active la génération du rapport tactique par le LLM.
+3.  **Analysez votre vidéo :**
+    - Chargez un fichier vidéo en utilisant la zone de glisser-déposer.
+    - Choisissez la qualité de l'analyse (Rapide, Équilibrée, ou Détaillée).
+    - Cliquez sur le bouton "Analyser" et suivez la progression en temps réel.
+    - Une fois l'analyse terminée, le tableau de bord interactif s'affichera avec les résultats.
 
 ## 📁 Fichiers de Sortie
 
-Après une analyse réussie, vous trouverez les fichiers suivants dans votre dossier de sortie :
+L'analyse génère les fichiers suivants dans un sous-dossier du répertoire temporaire de votre système :
 
-- `*_annotated.mp4` : La vidéo originale, annotée avec les boîtes des joueurs, leurs trajectoires et la compacité de l'équipe.
-- `players_stats.csv` : Statistiques détaillées pour chaque joueur (distance, vitesse, etc.).
-- `team_stats.csv` : Statistiques agrégées pour chaque équipe (possession, compacité, passes, dribbles).
-- `events.csv` : Liste de tous les événements détectés (passes, dribbles) avec les détails.
-- `summary.json` : Un résumé simple de l'analyse.
-- `tactical_report.txt` : (Si `--llm` est utilisé) Le rapport d'analyse généré par l'IA.
+- `analysis.db` : Une base de données SQLite contenant toutes les statistiques et les événements de l'analyse.
+- `*_annotated.avi` : La vidéo originale, annotée avec les mouvements des joueurs, téléchargeable depuis l'interface.

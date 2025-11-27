@@ -5,6 +5,9 @@ pandas
 scikit-learn
 scipy
 openai
-streamlit
 pyngrok
 requests
+dash>=2.17.1
+plotly
+dash-bootstrap-components
+diskcache
